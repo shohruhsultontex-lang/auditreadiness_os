@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        # Dialektni har doim psycopg2 drayveriga majburiy o'tkazish
+        # Dialektni har doim psycopg2 drayveriga moslash
         if "postgresql+psycopg://" in db_url:
             db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
         elif db_url.startswith("postgres://"):
