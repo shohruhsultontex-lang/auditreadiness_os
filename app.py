@@ -11,19 +11,30 @@ from sqlalchemy import create_engine, text
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        # Dialektni har doim psycopg2 drayveriga moslash
+        
+        # Dialektni har doim psycopg2 ga moslash
         if "postgresql+psycopg://" in db_url:
             db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
         elif db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
-    else:
-        db_url = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
-        
-    return create_engine(
-        db_url,
-        pool_pre_ping=True,
-        pool_recycle=300
-    )
+            
+        try:
+            temp_engine = create_engine(
+                db_url,
+                connect_args={"connect_timeout": 10},
+                pool_pre_ping=True,
+                pool_recycle=300
+            )
+            # Test ulanishi
+            with temp_engine.connect() as conn:
+                pass
+            return temp_engine
+        except Exception as e:
+            st.error(f"⚠️ Supabase bulutli bazaga ulanishda xatolik bo'ldi: {e}")
+            st.warning("⚠️ Zaxira lokal bazasi ishga tushirildi.")
+            
+    # Agar bulutli baza ishlamasa, sayt to'xtab qolmasligi uchun zaxira baza
+    return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
 
 engine = get_db_engine()
 UPLOAD_DIR = "uploads"
