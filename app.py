@@ -27,7 +27,7 @@ def get_db_engine():
                 pass
             return temp_engine
         except Exception:
-            pass # Xatolik bo'lsa ekranga hech narsa chiqarmaydi
+            pass # Xatolik bo'lsa ekranga chiqarilmaydi
             
     return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
 
@@ -166,6 +166,22 @@ def add_single_document_task(factory_name, cert_code, task_title, assigned_role,
             "factory_name": factory_name, "cert_code": cert_code,
             "task_title": task_title, "assigned_role": assigned_role,
             "due_date": str(due_date)
+        })
+
+def create_proactive_document(factory_name, cert_code, task_title, assigned_role, file_obj, comment=""):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(UPLOAD_DIR, file_obj.name)
+    with open(file_path, "wb") as f:
+        f.write(file_obj.getbuffer())
+        
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO document_tasks (factory_name, cert_code, task_title, assigned_role, due_date, status, file_evidence, comment)
+            VALUES (:factory_name, :cert_code, :task_title, :assigned_role, CURRENT_DATE, 'UNDER_REVIEW', :file_evidence, :comment)
+        """), {
+            "factory_name": factory_name, "cert_code": cert_code,
+            "task_title": task_title, "assigned_role": assigned_role,
+            "file_evidence": file_obj.name, "comment": comment
         })
 
 def get_document_tasks(factory_name, cert_code=None, role=None):
@@ -534,6 +550,65 @@ def main_dashboard():
                 st.info("Hozircha tekshiruv va tasdiqlash kutilayotgan yangi hujjatlar yo'q.")
             st.divider()
 
+        # MAS'UL XODIMLAR UCHUN TOP SHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
+        if user['role'] not in ['ceo', 'super_admin', 'compliance_manager']:
+            st.subheader(f"📤 Hujjat va Dalillarni Yuklash ({ROLE_LABELS.get(user['role'], 'Mas\'ul Xodim')})")
+            
+            tab_respond, tab_new = st.tabs(["📋 Biriktirilgan Topshiriqqa Javob Berish", "➕ Mustaqil Yangi Hujjat/Rasm Yuklash"])
+            
+            # Tab 1: Topshiriq bo'yicha yuklash
+            with tab_respond:
+                doc_tasks_emp = get_document_tasks(user['factory_name'], active_cert, user['role'])
+                pending_tasks = doc_tasks_emp[doc_tasks_emp['status'].isin(['PENDING', 'UNDER_REVIEW'])]
+                
+                if not pending_tasks.empty:
+                    col_sel, col_up = st.columns(2)
+                    with col_sel:
+                        task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
+                        emp_comment = st.text_input("Izoh (Ixtiyoriy):", key="emp_comment_resp")
+                    with col_up:
+                        task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"], key="task_file_resp")
+                    
+                    if st.button("Hujjatni Yuborish (Compliance Tekshiruviga)", key="btn_resp_sub"):
+                        if task_file:
+                            submit_task_evidence(task_to_done, task_file, emp_comment)
+                            st.success("Hujjat saqlandi! Compliance tekshiruviga yuborildi.")
+                            st.rerun()
+                        else:
+                            st.warning("Iltimos, fayl biriktiring!")
+                else:
+                    st.success("Sizga biriktirilgan kutilayotgan topshiriqlar yo'q.")
+
+            # Tab 2: Topshiriqsiz mustaqil yangi hujjat yuklash
+            with tab_new:
+                st.info("Topshiriq biriktirilmagan bo'lsa ham, ushbu xalqaro standartga tegishli hujjat yoki foto-dalilni yuklashingiz mumkin:")
+                with st.form("new_proactive_doc_form"):
+                    col_p1, col_p2 = st.columns(2)
+                    with col_p1:
+                        p_task_title = st.text_input("Hujjat / Rasm Nomi (Mavzusi):", placeholder="Masalan: Ekologik xulosa hujjati 2026")
+                        p_comment = st.text_input("Izoh yoki Qo'shimcha Izoh:")
+                    with col_p2:
+                        p_file = st.file_uploader("Fayl yoki Rasmni yuklang:", type=["pdf", "docx", "png", "jpg"], key="proactive_file")
+                    
+                    p_submit = st.form_submit_button("Hujjatni Yuklash va Compliance'ga Yuborish")
+                    
+                    if p_submit:
+                        if p_task_title and p_file:
+                            create_proactive_document(
+                                user['factory_name'],
+                                active_cert,
+                                p_task_title,
+                                user['role'],
+                                p_file,
+                                p_comment
+                            )
+                            st.success("Yangi hujjat saqlandi va Compliance Manager ga tekshiruvga yuborildi!")
+                            st.rerun()
+                        else:
+                            st.warning("Iltimos, hujjat nomini va faylni kiriting!")
+
+            st.divider()
+
         st.subheader(f"📂 Hujjatlar va Fayllar Reestri ({ROLE_LABELS.get(user['role'], 'Compliance Manager')})")
         doc_tasks = get_document_tasks(user['factory_name'], active_cert, user['role'])
         
@@ -570,28 +645,6 @@ def main_dashboard():
                         
             if not has_files:
                 st.info("Hozircha biror bir topshiriq uchun fayl yuklanmagan.")
-
-            if user['role'] not in ['ceo', 'super_admin', 'compliance_manager']:
-                st.subheader("📤 Topshiriqni Bajarish va Hujjat / Rasm Yuklash")
-                pending_tasks = doc_tasks[doc_tasks['status'].isin(['PENDING', 'UNDER_REVIEW'])]
-                if not pending_tasks.empty:
-                    col_sel, col_up = st.columns(2)
-                    with col_sel:
-                        task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyoriy):")
-                    with col_up:
-                        task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"])
-                    
-                    if st.button("Hujjatni Yuborish (Compliance Tekshiruviga)"):
-                        if task_file:
-                            submit_task_evidence(task_to_done, task_file, emp_comment)
-                            st.success("Hujjat saqlandi! Pastki panelda ko'rishingiz mumkin.")
-                            st.rerun()
-                        else:
-                            st.warning("Iltimos, fayl biriktiring!")
-                else:
-                    st.balloons()
-                    st.success("Barcha topshiriqlar tasdiqlangan!")
         else:
             st.info(f"{active_cert} standarti bo'yicha topshiriqlar mavjud emas.")
 
