@@ -1,171 +1,168 @@
 import os
-import sqlite3
 import bcrypt
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. BAZA VA AUTENTIFIKATSIYA
+# 1. BULUTLI BAZA (SUPABASE) ULANISHI
 # ==========================================
-DB_PATH = os.path.join("data", "app.db")
+def get_db_engine():
+    if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
+        db_url = st.secrets["postgres"]["url"]
+    else:
+        db_url = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
+    return create_engine(db_url)
+
+engine = get_db_engine()
 UPLOAD_DIR = "uploads"
 LOGO_PATH = "logo.png"
 
 def init_db():
-    os.makedirs("data", exist_ok=True)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                full_name TEXT NOT NULL,
+                factory_name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                is_verified INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            full_name TEXT NOT NULL,
-            factory_name TEXT NOT NULL,
-            role TEXT NOT NULL,
-            is_verified INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS document_tasks (
+                id SERIAL PRIMARY KEY,
+                factory_name TEXT NOT NULL,
+                cert_code TEXT NOT NULL,
+                task_title TEXT NOT NULL,
+                assigned_role TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                status TEXT DEFAULT 'PENDING',
+                file_evidence TEXT,
+                comment TEXT
+            );
+        """))
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS document_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            factory_name TEXT NOT NULL,
-            cert_code TEXT NOT NULL,
-            task_title TEXT NOT NULL,
-            assigned_role TEXT NOT NULL,
-            due_date TEXT NOT NULL,
-            status TEXT DEFAULT 'PENDING',
-            file_evidence TEXT,
-            comment TEXT
-        )
-    """)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS custom_certificates (
+                cert_code TEXT PRIMARY KEY,
+                cert_name TEXT NOT NULL
+            );
+        """))
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS custom_certificates (
-            cert_code TEXT PRIMARY KEY,
-            cert_name TEXT NOT NULL
-        )
-    """)
+        result = conn.execute(text("SELECT COUNT(*) FROM custom_certificates")).fetchone()
+        if result[0] == 0:
+            default_certs = [
+                {"code": "BSCI", "name": "Amfori BSCI Social Audit"},
+                {"code": "SMETA", "name": "SEDEX SMETA 4-Pillar Audit"},
+                {"code": "GOTS", "name": "Global Organic Textile Standard"},
+                {"code": "OEKO-TEX", "name": "OEKO-TEX Standard 100"},
+                {"code": "ISO 45001", "name": "ISO 45001 Safety Management"}
+            ]
+            for cert in default_certs:
+                conn.execute(text("INSERT INTO custom_certificates (cert_code, cert_name) VALUES (:code, :name)"), cert)
 
-    cursor.execute("SELECT COUNT(*) FROM custom_certificates")
-    if cursor.fetchone()[0] == 0:
-        default_certs = [
-            ("BSCI", "Amfori BSCI Social Audit"),
-            ("SMETA", "SEDEX SMETA 4-Pillar Audit"),
-            ("GOTS", "Global Organic Textile Standard"),
-            ("OEKO-TEX", "OEKO-TEX Standard 100"),
-            ("ISO 45001", "ISO 45001 Safety Management")
-        ]
-        cursor.executemany("INSERT INTO custom_certificates (cert_code, cert_name) VALUES (?, ?)", default_certs)
+def create_user_if_not_exists(email, password, full_name, factory_name, role):
+    with engine.begin() as conn:
+        res = conn.execute(text("SELECT COUNT(*) FROM users WHERE email = :email"), {"email": email}).fetchone()
+        if res[0] == 0:
+            salt = bcrypt.gensalt()
+            pwd_hash = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+            conn.execute(text("""
+                INSERT INTO users (email, password_hash, full_name, factory_name, role, is_verified)
+                VALUES (:email, :pwd_hash, :full_name, :factory_name, :role, 1)
+            """), {
+                "email": email, "pwd_hash": pwd_hash, "full_name": full_name, 
+                "factory_name": factory_name, "role": role
+            })
 
-    conn.commit()
-    conn.close()
+def create_user(email, password, full_name, factory_name, role):
+    try:
+        with engine.begin() as conn:
+            res = conn.execute(text("SELECT COUNT(*) FROM users WHERE email = :email"), {"email": email}).fetchone()
+            if res[0] > 0:
+                return False, "Bu email allaqachon mavjud!"
+            
+            salt = bcrypt.gensalt()
+            pwd_hash = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+            conn.execute(text("""
+                INSERT INTO users (email, password_hash, full_name, factory_name, role, is_verified)
+                VALUES (:email, :pwd_hash, :full_name, :factory_name, :role, 1)
+            """), {
+                "email": email, "pwd_hash": pwd_hash, "full_name": full_name, 
+                "factory_name": factory_name, "role": role
+            })
+            return True, "Foydalanuvchi muvaffaqiyatli yaratildi!"
+    except Exception as e:
+        return False, f"Xatolik yuz berdi: {str(e)}"
 
 def get_all_certificates():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT cert_code, cert_name FROM custom_certificates")
-    rows = cursor.fetchall()
-    conn.close()
-    return {code: name for code, name in rows}
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT cert_code, cert_name FROM custom_certificates", conn)
+        return dict(zip(df['cert_code'], df['cert_name']))
 
 def add_custom_certificate(cert_code, cert_name):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO custom_certificates (cert_code, cert_name) VALUES (?, ?)", (cert_code.strip(), cert_name.strip()))
-        conn.commit()
-        return True, "Sertifikat muvaffaqiyatli qo'shildi!"
-    except sqlite3.IntegrityError:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO custom_certificates (cert_code, cert_name) VALUES (:code, :name)"), 
+                         {"code": cert_code.strip(), "name": cert_name.strip()})
+            return True, "Sertifikat muvaffaqiyatli qo'shildi!"
+    except Exception:
         return False, "Ushbu sertifikat kodi allaqachon mavjud!"
-    finally:
-        conn.close()
 
 def update_custom_certificate(cert_code, new_cert_name):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE custom_certificates SET cert_name = ? WHERE cert_code = ?", (new_cert_name.strip(), cert_code))
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE custom_certificates SET cert_name = :name WHERE cert_code = :code"), 
+                     {"name": new_cert_name.strip(), "code": cert_code})
     return True, "Sertifikat nomi muvaffaqiyatli o'zgartirildi!"
 
 def delete_custom_certificate(cert_code):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM custom_certificates WHERE cert_code = ?", (cert_code,))
-    cursor.execute("DELETE FROM document_tasks WHERE cert_code = ?", (cert_code,))
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM custom_certificates WHERE cert_code = :code"), {"code": cert_code})
+        conn.execute(text("DELETE FROM document_tasks WHERE cert_code = :code"), {"code": cert_code})
     return True, f"'{cert_code}' sertifikati o'chirildi!"
 
-def create_user(email, password, full_name, factory_name, role):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    salt = bcrypt.gensalt()
-    pwd_hash = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
-    try:
-        cursor.execute("""
-            INSERT INTO users (email, password_hash, full_name, factory_name, role, is_verified)
-            VALUES (?, ?, ?, ?, ?, 1)
-        """, (email, pwd_hash, full_name, factory_name, role))
-        conn.commit()
-        return True, "Foydalanuvchi muvaffaqiyatli yaratildi!"
-    except sqlite3.IntegrityError:
-        return False, "Bu email allaqachon mavjud!"
-    finally:
-        conn.close()
-
 def verify_login(email, password):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, password_hash, full_name, factory_name, role FROM users WHERE email = ?", (email,))
-    user = cursor.fetchone()
-    conn.close()
-
-    if user and bcrypt.checkpw(password.encode('utf-8'), user[1].encode('utf-8')):
-        return {
-            "id": user[0],
-            "email": email,
-            "full_name": user[2],
-            "factory_name": user[3],
-            "role": user[4]
-        }
+    with engine.connect() as conn:
+        res = conn.execute(text("SELECT id, password_hash, full_name, factory_name, role FROM users WHERE email = :email"), {"email": email}).fetchone()
+        if res and bcrypt.checkpw(password.encode('utf-8'), res[1].encode('utf-8')):
+            return {
+                "id": res[0],
+                "email": email,
+                "full_name": res[2],
+                "factory_name": res[3],
+                "role": res[4]
+            }
     return None
 
 def add_single_document_task(factory_name, cert_code, task_title, assigned_role, due_date):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO document_tasks (factory_name, cert_code, task_title, assigned_role, due_date, status)
-        VALUES (?, ?, ?, ?, ?, 'PENDING')
-    """, (factory_name, cert_code, task_title, assigned_role, str(due_date)))
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO document_tasks (factory_name, cert_code, task_title, assigned_role, due_date, status)
+            VALUES (:factory_name, :cert_code, :task_title, :assigned_role, :due_date, 'PENDING')
+        """), {
+            "factory_name": factory_name, "cert_code": cert_code,
+            "task_title": task_title, "assigned_role": assigned_role,
+            "due_date": str(due_date)
+        })
 
 def get_document_tasks(factory_name, cert_code=None, role=None):
-    conn = sqlite3.connect(DB_PATH)
-    if role and role not in ["super_admin", "factory_admin", "compliance_manager", "ceo"]:
-        df = pd.read_sql_query(
-            "SELECT * FROM document_tasks WHERE factory_name = ? AND cert_code = ? AND assigned_role = ?", 
-            conn, params=(factory_name, cert_code, role)
-        )
-    elif cert_code:
-        df = pd.read_sql_query(
-            "SELECT * FROM document_tasks WHERE factory_name = ? AND cert_code = ?", 
-            conn, params=(factory_name, cert_code)
-        )
-    else:
-        df = pd.read_sql_query(
-            "SELECT * FROM document_tasks WHERE factory_name = ?", 
-            conn, params=(factory_name,)
-        )
-    conn.close()
-    return df
+    with engine.connect() as conn:
+        if role and role not in ["super_admin", "factory_admin", "compliance_manager", "ceo"]:
+            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code AND assigned_role = :role")
+            return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code, "role": role})
+        elif cert_code:
+            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code")
+            return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code})
+        else:
+            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name")
+            return pd.read_sql(query, conn, params={"factory_name": factory_name})
 
 def submit_task_evidence(task_id, file_obj, comment=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -173,33 +170,26 @@ def submit_task_evidence(task_id, file_obj, comment=""):
     with open(file_path, "wb") as f:
         f.write(file_obj.getbuffer())
         
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE document_tasks SET status = 'UNDER_REVIEW', file_evidence = ?, comment = ? WHERE id = ?
-    """, (file_obj.name, comment, task_id))
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE document_tasks SET status = 'UNDER_REVIEW', file_evidence = :file_evidence, comment = :comment WHERE id = :id
+        """), {"file_evidence": file_obj.name, "comment": comment, "id": task_id})
 
 def approve_task_status(task_id, is_approved, feedback=""):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
     new_status = 'APPROVED' if is_approved else 'PENDING'
-    cursor.execute("""
-        UPDATE document_tasks SET status = ?, comment = ? WHERE id = ?
-    """, (new_status, feedback, task_id))
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE document_tasks SET status = :status, comment = :comment WHERE id = :id
+        """), {"status": new_status, "comment": feedback, "id": task_id})
 
 init_db()
-
-create_user("admin@auditreadiness.uz", "Admin123!@#", "Shohruh Shuxratov", "Sulton Styles", "super_admin")
-create_user("compliance@sulton.uz", "Comp123!@#", "Shohruh Compliance", "Sulton Styles", "compliance_manager")
-create_user("ceo@sulton.uz", "CEO123!@#", "Bosh Direktor (CEO)", "Sulton Styles", "ceo")
-create_user("ecologist@sulton.uz", "Eco123!@#", "Ekolog Mas'uli", "Sulton Styles", "ecologist")
-create_user("hr@sulton.uz", "HR123!@#", "HR Mas'uli", "Sulton Styles", "hr_manager")
-create_user("tradeunion@sulton.uz", "Union123!@#", "Kasaba Uyushmasi Raisi", "Sulton Styles", "trade_union")
-create_user("osh@sulton.uz", "OSH123!@#", "OSH / Mehnat Muhofazasi", "Sulton Styles", "osh_manager")
+create_user_if_not_exists("admin@auditreadiness.uz", "Admin123!@#", "Shohruh Shuxratov", "Sulton Styles", "super_admin")
+create_user_if_not_exists("compliance@sulton.uz", "Comp123!@#", "Shohruh Compliance", "Sulton Styles", "compliance_manager")
+create_user_if_not_exists("ceo@sulton.uz", "CEO123!@#", "Bosh Direktor (CEO)", "Sulton Styles", "ceo")
+create_user_if_not_exists("ecologist@sulton.uz", "Eco123!@#", "Ekolog Mas'uli", "Sulton Styles", "ecologist")
+create_user_if_not_exists("hr@sulton.uz", "HR123!@#", "HR Mas'uli", "Sulton Styles", "hr_manager")
+create_user_if_not_exists("tradeunion@sulton.uz", "Union123!@#", "Kasaba Uyushmasi Raisi", "Sulton Styles", "trade_union")
+create_user_if_not_exists("osh@sulton.uz", "OSH123!@#", "OSH / Mehnat Muhofazasi", "Sulton Styles", "osh_manager")
 
 # ==========================================
 # 2. STREAMLIT CONFIGURATION
@@ -210,7 +200,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Розовый фон приложения (Pink Theme)
 st.markdown("", unsafe_allow_html=True)
 
 if "user" not in st.session_state:
@@ -366,14 +355,14 @@ def main_dashboard():
 
         st.divider()
 
-        menu = [
-            "📊 Executive Dashboard", 
-            "📑 Document Hub"
+        menu_options = [
+            "📊 Axborotlar oynasi", 
+            "📑 Hujjatlar"
         ]
         if user['role'] in ['super_admin', 'compliance_manager']:
-            menu.append("⚙️ Admin: User Qo'shish")
+            menu_options.append("⚙️ Admin: User Qo'shish")
             
-        choice = st.radio("Bo'limlar", menu)
+        choice = st.radio("Bo'limlar", menu_options)
         
         st.divider()
         if st.button("Tizimdan chiqish", use_container_width=True):
@@ -383,9 +372,9 @@ def main_dashboard():
     active_cert = st.session_state.selected_cert
     active_cert_full_name = cert_dict.get(active_cert, active_cert)
 
-    # 1. EXECUTIVE DASHBOARD
-    if choice == "📊 Executive Dashboard":
-        st.title(f"📊 Executive Dashboard — [{active_cert}]")
+    # 1. AXBOROTLAR OYNASI
+    if choice == "📊 Axborotlar oynasi":
+        st.title(f"📊 Axborotlar oynasi — [{active_cert}]")
         st.caption(f"{user['factory_name']} kompaniyasining **{active_cert_full_name}** standarti bo'yicha tayyorgarlik holati")
         
         doc_tasks_df = get_document_tasks(user['factory_name'], active_cert)
@@ -424,24 +413,25 @@ def main_dashboard():
                     names="status", 
                     title=f"Hujjatlar Bajarilishi (Jami: {total_docs} ta)",
                     color="status",
-                    color_discrete_map={"APPROVED":"#2e7d32", "UNDER_REVIEW":"#1565c0", "PENDING":"#ef6c00"}
+                    color_discrete_map={"APPROVED":"#2e7d32", "UNDER_REVIEW":"#1565c0", "PENDING":"#ef6c00"},
+                    template="plotly_dark"
                 )
                 st.plotly_chart(fig_doc, use_container_width=True)
             else:
-                st.info("Hali Document Hub bo'limida topshiriqlar yuklanmagan.")
+                st.info("Hali Hujjatlar bo'limida topshiriqlar yuklanmagan.")
             
         with col_chart2:
             st.subheader(f"{active_cert} bo'yicha Mas'ullar Kesimida Holat")
             if total_docs > 0:
                 df_role_chart = doc_tasks_df.groupby(["assigned_role", "status"]).size().reset_index(name="Soni")
-                fig_bar = px.bar(df_role_chart, x="assigned_role", y="Soni", color="status", barmode="group", title="Mas'ullar Kesimida Hujjatlar")
+                fig_bar = px.bar(df_role_chart, x="assigned_role", y="Soni", color="status", barmode="group", title="Mas'ullar Kesimida Hujjatlar", template="plotly_dark")
                 st.plotly_chart(fig_bar, use_container_width=True)
             else:
                 st.info("Statistika shakllanishi uchun topshiriqlar qo'shing.")
 
-    # 2. DOCUMENT HUB
-    elif choice == "📑 Document Hub":
-        st.title(f"📑 Document Hub va Topshiriqlar Paneli — [{active_cert}]")
+    # 2. HUJJATLAR
+    elif choice == "📑 Hujjatlar":
+        st.title(f"📑 Hujjatlar va Topshiriqlar Paneli — [{active_cert}]")
         st.caption(f"**{active_cert_full_name}** standarti doirasida topshiriqlar, ijro va Compliance tasdiqlash jarayoni")
         
         if user['role'] in ['super_admin', 'compliance_manager', 'factory_admin']:
