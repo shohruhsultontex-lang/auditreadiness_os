@@ -7,32 +7,19 @@ from sqlalchemy import create_engine, text
 
 # ==========================================
 # 1. BULUTLI BAZA (SUPABASE) ULANISHI
+# ==========================================
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        
-        # Dialektni psycopg3 uchun moslash
-        if db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        if db_url.startswith("postgresql+psycopg://"):
+            db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
         elif db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
-            
-        # SSL Mode parametrini qo'shish
-        if "sslmode" not in db_url:
-            separator = "&" if "?" in db_url else "?"
-            db_url += f"{separator}sslmode=require"
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
     else:
         db_url = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
         
     return create_engine(
         db_url,
-        connect_args={"connect_timeout": 15},
-        pool_pre_ping=True,
-        pool_recycle=300
-    )
-    return create_engine(
-        db_url,
-        connect_args={"connect_timeout": 10},
         pool_pre_ping=True,
         pool_recycle=300
     )
@@ -584,7 +571,7 @@ def main_dashboard():
                     col_sel, col_up = st.columns(2)
                     with col_sel:
                         task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyoriy):")
+                        emp_comment = st.text_input("Izoh (Ixtiyotiy):")
                     with col_up:
                         task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"])
                     
