@@ -11,7 +11,8 @@ from sqlalchemy import create_engine, text
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        if db_url.startswith("postgresql+psycopg://"):
+        # Dialektni har doim psycopg2 drayveriga majburiy o'tkazish
+        if "postgresql+psycopg://" in db_url:
             db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
         elif db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
@@ -571,7 +572,7 @@ def main_dashboard():
                     col_sel, col_up = st.columns(2)
                     with col_sel:
                         task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyotiy):")
+                        emp_comment = st.text_input("Izoh (Ixtiyoriy):")
                     with col_up:
                         task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"])
                     
