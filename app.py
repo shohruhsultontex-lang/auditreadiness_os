@@ -11,6 +11,8 @@ from sqlalchemy import create_engine, text
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
+        if db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
     else:
         db_url = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
     return create_engine(db_url)
