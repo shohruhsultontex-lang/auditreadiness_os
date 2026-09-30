@@ -22,7 +22,7 @@ def get_db_engine():
                 pass
             return temp_engine
         except Exception as e:
-            st.warning(f"⚠️ Подключение к Supabase недоступно, переключение на локальную базу: {e}")
+            st.warning(f"Supabase ulanishida xatolik: {e}")
             
     return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
 
