@@ -184,9 +184,9 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
             "file_evidence": file_obj.name, "comment": comment
         })
 
-def get_document_tasks(factory_name=None, cert_code=None, role=None, status_filter=None):
+def get_document_tasks(factory_name=None, cert_code=None, role=None):
     with engine.connect() as conn:
-        # Xodimlar uchun
+        # Odatiy xodimlarga faqat ozi uchun
         if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
             if cert_code:
                 query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
@@ -194,22 +194,14 @@ def get_document_tasks(factory_name=None, cert_code=None, role=None, status_filt
             else:
                 query = text("SELECT * FROM document_tasks WHERE assigned_role = :role ORDER BY id DESC")
                 return pd.read_sql(query, conn, params={"role": role})
-        # Compliance Manager / Admin uchun
+        # Compliance Manager hamda CEO uchun filtrlarni olib tashlaymiz - BARCHASINI KORSATISH UCHUN
         else:
-            if status_filter:
-                if cert_code:
-                    query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND status IN ('PENDING', 'UNDER_REVIEW') ORDER BY id DESC")
-                    return pd.read_sql(query, conn, params={"cert_code": cert_code})
-                else:
-                    query = text("SELECT * FROM document_tasks WHERE status IN ('PENDING', 'UNDER_REVIEW') ORDER BY id DESC")
-                    return pd.read_sql(query, conn)
+            if cert_code:
+                query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"cert_code": cert_code})
             else:
-                if cert_code:
-                    query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code ORDER BY id DESC")
-                    return pd.read_sql(query, conn, params={"cert_code": cert_code})
-                else:
-                    query = text("SELECT * FROM document_tasks ORDER BY id DESC")
-                    return pd.read_sql(query, conn)
+                query = text("SELECT * FROM document_tasks ORDER BY id DESC")
+                return pd.read_sql(query, conn)
 
 def submit_task_evidence(task_id, file_obj, comment=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -222,15 +214,12 @@ def submit_task_evidence(task_id, file_obj, comment=""):
             UPDATE document_tasks SET status = 'UNDER_REVIEW', file_evidence = :file_evidence, comment = :comment WHERE id = :id
         """), {"file_evidence": file_obj.name, "comment": comment, "id": task_id})
 
-def approve_task_status(task_id, feedback=""):
+def approve_task_status(task_id, is_approved, feedback=""):
+    new_status = 'APPROVED' if is_approved else 'PENDING'
     with engine.begin() as conn:
         conn.execute(text("""
-            UPDATE document_tasks SET status = 'APPROVED', comment = :comment WHERE id = :id
-        """), {"comment": feedback, "id": task_id})
-
-def delete_task_permanently(task_id):
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM document_tasks WHERE id = :id"), {"id": task_id})
+            UPDATE document_tasks SET status = :status, comment = :comment WHERE id = :id
+        """), {"status": new_status, "comment": feedback, "id": task_id})
 
 init_db()
 create_user_if_not_exists("admin@auditreadiness.uz", "Admin123!@#", "Shohruh Shuxratov", "Sulton Styles", "super_admin")
@@ -275,7 +264,7 @@ def login_page():
         if os.path.exists(LOGO_PATH):
             st.image(LOGO_PATH, width=220)
             
-        st.title("🛡 Sulton Certificates")
+        st.title("🛡️ Sulton Certificates")
         st.caption("Sulton Tex Group — Xalqaro Audit va Sertifikatlashtirish Platformasi")
         st.divider()
         
@@ -372,7 +361,7 @@ def main_dashboard():
 
         if user['role'] in ['super_admin', 'compliance_manager']:
             with st.expander("🛠️ Sertifikatlarni Boshqarish"):
-                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️ Tahrirlash", "🗑️ O'chirish"])
+                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️ Tahrirlash", "🗑️️ O'chirish"])
                 
                 with tab_add:
                     new_c_code = st.text_input("Kodi (masalan: HIGG):", key="add_code")
@@ -525,14 +514,14 @@ def main_dashboard():
             st.divider()
 
         if user['role'] in ['super_admin', 'compliance_manager']:
-            st.subheader("🔍 Compliance Manager: Kelib Tushgan Hujjatlarni Tekshirish va Tasdiqlash")
+            st.subheader("🔍 Compliance Manager: Barcha Kelib Tushgan Hujjatlar")
             
-            # FAQT KUTILAYOTGAN (PENDING YOKI UNDER_REVIEW) HUJJATLARNI OLISH
-            pending_review_df = get_document_tasks(status_filter=True)
+            # FILTRSIZ BARCHA HUJJATLARNI OLISH
+            review_df = get_document_tasks()
             
-            if not pending_review_df.empty:
-                st.write(f"📊 Kutilayotgan va tekshirilishi kerak bo'lgan hujjatlar soni: **{len(pending_review_df)} ta**")
-                for _, task in pending_review_df.iterrows():
+            if not review_df.empty:
+                st.write(f"📊 Jami bazadagi barcha hujjatlar soni: **{len(review_df)} ta**")
+                for _, task in review_df.iterrows():
                     with st.expander(f"🔹 Topshiriq #{task['id']}: {task['task_title']} ({ROLE_LABELS.get(task['assigned_role'], task['assigned_role'])}) | Standart: [{task['cert_code']}] | Status: [{task['status']}]", expanded=True):
                         col_info, col_file = st.columns([2, 1])
                         
@@ -568,15 +557,15 @@ def main_dashboard():
                         with col_act2:
                             st.write("")
                             if st.button("✅ Tasdiqlash", key=f"app_{task['id']}", type="primary"):
-                                approve_task_status(task['id'], feedback)
-                                st.success(f"ID #{task['id']} Tasdiqlandi va Reestrga saqlandi!")
+                                approve_task_status(task['id'], True, feedback)
+                                st.success(f"ID #{task['id']} Tasdiqlandi!")
                                 st.rerun()
                             if st.button("❌ Rad etish", key=f"rej_{task['id']}"):
-                                delete_task_permanently(task['id'])
-                                st.error(f"ID #{task['id']} Batamom o'chirib tashlandi!")
+                                approve_task_status(task['id'], False, feedback)
+                                st.warning(f"ID #{task['id']} Qaytarildi!")
                                 st.rerun()
             else:
-                st.info("Hozircha tekshirish uchun yangi kelib tushgan hujjatlar yo'q.")
+                st.info("Hozircha bazada umumiy topshiriqlar yoki yuklangan hujjatlar mavjud emas.")
             st.divider()
 
         # MAS'UL XODIMLAR UCHUN TOPSHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
@@ -594,7 +583,7 @@ def main_dashboard():
                     col_sel, col_up = st.columns(2)
                     with col_sel:
                         task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyoriy):", key="emp_comment_resp")
+                        emp_comment = st.text_input("Izoh (Ixtiyotiy):", key="emp_comment_resp")
                     with col_up:
                         task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"], key="task_file_resp")
                     
@@ -639,18 +628,15 @@ def main_dashboard():
             st.divider()
 
         st.subheader(f"📂 Hujjatlar va Fayllar Reestri ({ROLE_LABELS.get(user['role'], 'Compliance Manager')})")
+        doc_tasks = get_document_tasks(user['factory_name'], active_cert, user['role'])
         
-        # Reestrda faqat tasdiqlangan (APPROVED) hujjatlar saqlanadi va ko'rsatiladi
-        doc_tasks_approved = get_document_tasks()
-        doc_tasks_approved = doc_tasks_approved[doc_tasks_approved['status'] == 'APPROVED'] if not doc_tasks_approved.empty else pd.DataFrame()
-        
-        if not doc_tasks_approved.empty:
-            st.dataframe(doc_tasks_approved[["id", "task_title", "cert_code", "assigned_role", "due_date", "status", "file_evidence", "comment"]], use_container_width=True)
+        if not doc_tasks.empty:
+            st.dataframe(doc_tasks[["id", "task_title", "assigned_role", "due_date", "status", "file_evidence", "comment"]], use_container_width=True)
             
-            st.subheader("📥 Barcha tasdiqlangan fayllar paneli (Yuklab olish va Ko'rish):")
+            st.subheader("📥 Barcha yuklangan fayllar paneli (Yuklab olish va Ko'rish):")
             
             has_files = False
-            for _, r_task in doc_tasks_approved.iterrows():
+            for _, r_task in doc_tasks.iterrows():
                 f_name = str(r_task['file_evidence'])
                 if f_name and f_name != 'None' and f_name != 'nan':
                     has_files = True
@@ -658,7 +644,7 @@ def main_dashboard():
                     
                     with st.container():
                         col_t_title, col_t_dl = st.columns([3, 1])
-                        col_t_title.markdown(f"📄 **{r_task['task_title']}** | Standart: `{r_task['cert_code']}` | Mas'ul: `{r_task['assigned_role']}` | Holat: **{r_task['status']}**\n\nFayl nomi: `{f_name}`")
+                        col_t_title.markdown(f"📄 **{r_task['task_title']}** | Mas'ul: `{r_task['assigned_role']}` | Holat: **{r_task['status']}**\n\nFayl nomi: `{f_name}`")
                         
                         if os.path.exists(f_path):
                             with open(f_path, "rb") as f_data:
@@ -676,9 +662,9 @@ def main_dashboard():
                         st.divider()
                         
             if not has_files:
-                st.info("Hozircha biror bir tasdiqlangan topshiriq uchun fayl yuklanmagan.")
+                st.info("Hozircha biror bir topshiriq uchun fayl yuklanmagan.")
         else:
-            st.info("Hozircha reestrda tasdiqlangan hujjatlar mavjud emas.")
+            st.info(f"{active_cert} standarti bo'yicha topshiriqlar mavjud emas.")
 
     # 3. ADMIN USER QO'SHISH
     elif choice == "⚙️ Admin: User Qo'shish" and user['role'] in ['super_admin', 'compliance_manager']:
