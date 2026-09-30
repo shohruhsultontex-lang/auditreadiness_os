@@ -6,7 +6,7 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. BAZA ULANISHI (SUPABASE & FALLBACK)
+# 1. BAZA ULANISHI (OPTIMAL CACHING)
 # ==========================================
 @st.cache_resource
 def get_db_engine():
@@ -186,13 +186,13 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
 def get_document_tasks(factory_name, cert_code=None, role=None):
     with engine.connect() as conn:
         if role and role not in ["super_admin", "factory_admin", "compliance_manager", "ceo"]:
-            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code AND assigned_role = :role")
+            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
             return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code, "role": role})
         elif cert_code:
-            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code")
+            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code ORDER BY id DESC")
             return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code})
         else:
-            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name")
+            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name ORDER BY id DESC")
             return pd.read_sql(query, conn, params={"factory_name": factory_name})
 
 def submit_task_evidence(task_id, file_obj, comment=""):
@@ -223,7 +223,7 @@ create_user_if_not_exists("tradeunion@sulton.uz", "Union123!@#", "Kasaba Uyushma
 create_user_if_not_exists("osh@sulton.uz", "OSH123!@#", "OSH / Mehnat Muhofazasi", "Sulton Styles", "osh_manager")
 
 # ==========================================
-# 2. STREAMLIT CONFIGURATION
+# 2. STREAMLIT CONFIGURATION & AUTO-REFRESH
 # ==========================================
 st.set_page_config(
     page_title="Sulton Certificates",
@@ -321,6 +321,11 @@ def main_dashboard():
         st.title("Sulton Certificates")
         st.write(f"👤 **{user['full_name']}**")
         st.caption(f"🏢 {user['factory_name']} | Rol: **{ROLE_LABELS.get(user['role'], 'Compliance Manager')}**")
+        
+        col_ref1, col_ref2 = st.columns([2, 1])
+        if col_ref2.button("🔄 Yangilash"):
+            st.rerun()
+            
         st.divider()
         
         st.subheader("🎯 Sertifikatlarga:")
