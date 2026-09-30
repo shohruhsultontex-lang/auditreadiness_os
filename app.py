@@ -187,14 +187,34 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
 
 def get_document_tasks(factory_name, cert_code=None, role=None):
     with engine.connect() as conn:
-        if role and role not in ["super_admin", "factory_admin", "compliance_manager", "ceo"]:
-            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
+        # Если зашел обычный сотрудник (HR, Эколог, OSH) — показывает только его задачи
+        if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
+            query = text("""
+                SELECT * FROM document_tasks 
+                WHERE factory_name = :factory_name 
+                AND cert_code = :cert_code 
+                AND assigned_role = :role 
+                ORDER BY id DESC
+            """)
             return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code, "role": role})
+        
+        # Если зашел Compliance Manager, Admin или CEO — показывает ВСЕ документы по этому сертификату
         elif cert_code:
-            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code ORDER BY id DESC")
+            query = text("""
+                SELECT * FROM document_tasks 
+                WHERE factory_name = :factory_name 
+                AND cert_code = :cert_code 
+                ORDER BY id DESC
+            """)
             return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code})
+        
+        # Общий вывод для реестра
         else:
-            query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name ORDER BY id DESC")
+            query = text("""
+                SELECT * FROM document_tasks 
+                WHERE factory_name = :factory_name 
+                ORDER BY id DESC
+            """)
             return pd.read_sql(query, conn, params={"factory_name": factory_name})
 
 def submit_task_evidence(task_id, file_obj, comment=""):
