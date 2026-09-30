@@ -184,24 +184,24 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
             "file_evidence": file_obj.name, "comment": comment
         })
 
-def get_document_tasks(factory_name, cert_code=None, role=None):
+def get_document_tasks(factory_name=None, cert_code=None, role=None):
     with engine.connect() as conn:
-        # Odatiy ijrochi xodimlar faqat ozlariga tegishlisini koradi
+        # Odatiy xodimlarga faqat ozi uchun
         if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
             if cert_code:
-                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
-                return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code, "role": role})
+                query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"cert_code": cert_code, "role": role})
             else:
-                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND assigned_role = :role ORDER BY id DESC")
-                return pd.read_sql(query, conn, params={"factory_name": factory_name, "role": role})
-        # Admin / Compliance / CEO BARCHA hujjatlarni koradi
+                query = text("SELECT * FROM document_tasks WHERE assigned_role = :role ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"role": role})
+        # Compliance Manager hamda CEO uchun filtrlarni olib tashlaymiz - BARCHASINI KORSATISH UCHUN
         else:
             if cert_code:
-                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code ORDER BY id DESC")
-                return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code})
+                query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"cert_code": cert_code})
             else:
-                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name ORDER BY id DESC")
-                return pd.read_sql(query, conn, params={"factory_name": factory_name})
+                query = text("SELECT * FROM document_tasks ORDER BY id DESC")
+                return pd.read_sql(query, conn)
 
 def submit_task_evidence(task_id, file_obj, comment=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -361,7 +361,7 @@ def main_dashboard():
 
         if user['role'] in ['super_admin', 'compliance_manager']:
             with st.expander("🛠️ Sertifikatlarni Boshqarish"):
-                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️ Tahrirlash", "🗑️ O'chirish"])
+                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️ Tahrirlash", "🗑️️ O'chirish"])
                 
                 with tab_add:
                     new_c_code = st.text_input("Kodi (masalan: HIGG):", key="add_code")
@@ -514,16 +514,19 @@ def main_dashboard():
             st.divider()
 
         if user['role'] in ['super_admin', 'compliance_manager']:
-            st.subheader("🔍 Compliance Manager: Kelib Tushgan Hujjatlarni Tekshirish va Tasdiqlash")
-            review_df = get_document_tasks(user['factory_name'], active_cert)
+            st.subheader("🔍 Compliance Manager: Barcha Kelib Tushgan Hujjatlar")
             
-            # Compliance Manager uchun barcha holatdagi va yuklangan fayllari bor topshiriqlar/mustaqil hujjatlar ko'rsatiladi
+            # FILTRSIZ BARCHA HUJJATLARNI OLISH
+            review_df = get_document_tasks()
+            
             if not review_df.empty:
+                st.write(f"📊 Jami bazadagi barcha hujjatlar soni: **{len(review_df)} ta**")
                 for _, task in review_df.iterrows():
-                    with st.expander(f"🔹 Topshiriq #{task['id']}: {task['task_title']} ({ROLE_LABELS.get(task['assigned_role'], task['assigned_role'])}) — Status: [{task['status']}]", expanded=(task['status'] == 'UNDER_REVIEW')):
+                    with st.expander(f"🔹 Topshiriq #{task['id']}: {task['task_title']} ({ROLE_LABELS.get(task['assigned_role'], task['assigned_role'])}) | Standart: [{task['cert_code']}] | Status: [{task['status']}]", expanded=True):
                         col_info, col_file = st.columns([2, 1])
                         
                         with col_info:
+                            st.write(f"**Sertifikat:** `{task['cert_code']}` | **Fabrika:** `{task['factory_name']}`")
                             st.write(f"**Bajarish muddati / Sana:** {task['due_date']}")
                             st.write(f"**Xodim izohi:** {task['comment'] if task['comment'] else 'Izoh yoq'}")
                             st.write(f"**Yuklangan fayl nomi:** `{task['file_evidence']}`")
@@ -562,7 +565,7 @@ def main_dashboard():
                                 st.warning(f"ID #{task['id']} Qaytarildi!")
                                 st.rerun()
             else:
-                st.info("Hozircha ushbu sertifikat bo'yicha topshiriqlar yoki yuklangan hujjatlar yo'q.")
+                st.info("Hozircha bazada umumiy topshiriqlar yoki yuklangan hujjatlar mavjud emas.")
             st.divider()
 
         # MAS'UL XODIMLAR UCHUN TOPSHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
@@ -580,7 +583,7 @@ def main_dashboard():
                     col_sel, col_up = st.columns(2)
                     with col_sel:
                         task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyoriy):", key="emp_comment_resp")
+                        emp_comment = st.text_input("Izoh (Ixtiyotiy):", key="emp_comment_resp")
                     with col_up:
                         task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"], key="task_file_resp")
                     
@@ -664,7 +667,7 @@ def main_dashboard():
             st.info(f"{active_cert} standarti bo'yicha topshiriqlar mavjud emas.")
 
     # 3. ADMIN USER QO'SHISH
-    elif choice == "⚙️️ Admin: User Qo'shish" and user['role'] in ['super_admin', 'compliance_manager']:
+    elif choice == "⚙️ Admin: User Qo'shish" and user['role'] in ['super_admin', 'compliance_manager']:
         admin_user_management()
 
 if __name__ == "__main__":
