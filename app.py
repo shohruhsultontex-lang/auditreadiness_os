@@ -6,7 +6,7 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. BAZA ULANISHI (HIGH-SPEED PGBOUNCER POOLING)
+# 1. BAZA ULANISHI (FAQAT BULUTLI SUPABASE)
 # ==========================================
 @st.cache_resource
 def get_db_engine():
@@ -22,9 +22,7 @@ def get_db_engine():
 
         engine = create_engine(
             db_url,
-            connect_args={"connect_timeout": 5},
-            pool_size=20,
-            max_overflow=0,
+            connect_args={"connect_timeout": 15},
             pool_pre_ping=True,
             pool_recycle=300
         )
@@ -36,42 +34,6 @@ def get_db_engine():
 engine = get_db_engine()
 UPLOAD_DIR = "uploads"
 LOGO_PATH = "logo.png"
-
-# ULTRA-TEZKOR KESH SO'ROVLAR
-@st.cache_data(ttl=10)
-def get_all_certificates_cached():
-    with engine.connect() as conn:
-        df = pd.read_sql("SELECT cert_code, cert_name FROM custom_certificates", conn)
-        return dict(zip(df['cert_code'], df['cert_name']))
-
-@st.cache_data(ttl=3)
-def get_document_tasks_cached(factory_name=None, cert_code=None, role=None, status_filter=None):
-    with engine.connect() as conn:
-        if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
-            if cert_code:
-                query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
-                return pd.read_sql(query, conn, params={"cert_code": cert_code, "role": role})
-            else:
-                query = text("SELECT * FROM document_tasks WHERE assigned_role = :role ORDER BY id DESC")
-                return pd.read_sql(query, conn, params={"role": role})
-        else:
-            if status_filter:
-                if cert_code:
-                    query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND status IN ('PENDING', 'UNDER_REVIEW') ORDER BY id DESC")
-                    return pd.read_sql(query, conn, params={"cert_code": cert_code})
-                else:
-                    query = text("SELECT * FROM document_tasks WHERE status IN ('PENDING', 'UNDER_REVIEW') ORDER BY id DESC")
-                    return pd.read_sql(query, conn)
-            else:
-                if cert_code:
-                    query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code ORDER BY id DESC")
-                    return pd.read_sql(query, conn, params={"cert_code": cert_code})
-                else:
-                    query = text("SELECT * FROM document_tasks ORDER BY id DESC")
-                    return pd.read_sql(query, conn)
-
-def clear_app_cache():
-    st.cache_data.clear()
 
 def init_db():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -152,17 +114,20 @@ def create_user(email, password, full_name, factory_name, role):
                 "email": email, "pwd_hash": pwd_hash, "full_name": full_name, 
                 "factory_name": factory_name, "role": role
             })
-            clear_app_cache()
             return True, "Foydalanuvchi muvaffaqiyatli yaratildi!"
     except Exception as e:
         return False, f"Xatolik yuz berdi: {str(e)}"
+
+def get_all_certificates():
+    with engine.connect() as conn:
+        df = pd.read_sql("SELECT cert_code, cert_name FROM custom_certificates", conn)
+        return dict(zip(df['cert_code'], df['cert_name']))
 
 def add_custom_certificate(cert_code, cert_name):
     try:
         with engine.begin() as conn:
             conn.execute(text("INSERT INTO custom_certificates (cert_code, cert_name) VALUES (:code, :name)"), 
                          {"code": cert_code.strip(), "name": cert_name.strip()})
-            clear_app_cache()
             return True, "Sertifikat muvaffaqiyatli qo'shildi!"
     except Exception:
         return False, "Ushbu sertifikat kodi allaqachon mavjud!"
@@ -171,14 +136,12 @@ def update_custom_certificate(cert_code, new_cert_name):
     with engine.begin() as conn:
         conn.execute(text("UPDATE custom_certificates SET cert_name = :name WHERE cert_code = :code"), 
                      {"name": new_cert_name.strip(), "code": cert_code})
-    clear_app_cache()
     return True, "Sertifikat nomi muvaffaqiyatli o'zgartirildi!"
 
 def delete_custom_certificate(cert_code):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM custom_certificates WHERE cert_code = :code"), {"code": cert_code})
         conn.execute(text("DELETE FROM document_tasks WHERE cert_code = :code"), {"code": cert_code})
-    clear_app_cache()
     return True, f"'{cert_code}' sertifikati o'chirildi!"
 
 def verify_login(email, password):
@@ -204,7 +167,6 @@ def add_single_document_task(factory_name, cert_code, task_title, assigned_role,
             "task_title": task_title, "assigned_role": assigned_role,
             "due_date": str(due_date)
         })
-    clear_app_cache()
 
 def create_proactive_document(factory_name, cert_code, task_title, assigned_role, file_obj, comment=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -221,7 +183,33 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
             "task_title": task_title, "assigned_role": assigned_role,
             "file_evidence": file_obj.name, "comment": comment
         })
-    clear_app_cache()
+
+def get_document_tasks(factory_name=None, cert_code=None, role=None, status_filter=None):
+    with engine.connect() as conn:
+        # Xodimlar uchun
+        if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
+            if cert_code:
+                query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"cert_code": cert_code, "role": role})
+            else:
+                query = text("SELECT * FROM document_tasks WHERE assigned_role = :role ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"role": role})
+        # Compliance Manager / Admin uchun
+        else:
+            if status_filter:
+                if cert_code:
+                    query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code AND status IN ('PENDING', 'UNDER_REVIEW') ORDER BY id DESC")
+                    return pd.read_sql(query, conn, params={"cert_code": cert_code})
+                else:
+                    query = text("SELECT * FROM document_tasks WHERE status IN ('PENDING', 'UNDER_REVIEW') ORDER BY id DESC")
+                    return pd.read_sql(query, conn)
+            else:
+                if cert_code:
+                    query = text("SELECT * FROM document_tasks WHERE cert_code = :cert_code ORDER BY id DESC")
+                    return pd.read_sql(query, conn, params={"cert_code": cert_code})
+                else:
+                    query = text("SELECT * FROM document_tasks ORDER BY id DESC")
+                    return pd.read_sql(query, conn)
 
 def submit_task_evidence(task_id, file_obj, comment=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -233,19 +221,16 @@ def submit_task_evidence(task_id, file_obj, comment=""):
         conn.execute(text("""
             UPDATE document_tasks SET status = 'UNDER_REVIEW', file_evidence = :file_evidence, comment = :comment WHERE id = :id
         """), {"file_evidence": file_obj.name, "comment": comment, "id": task_id})
-    clear_app_cache()
 
 def approve_task_status(task_id, feedback=""):
     with engine.begin() as conn:
         conn.execute(text("""
             UPDATE document_tasks SET status = 'APPROVED', comment = :comment WHERE id = :id
         """), {"comment": feedback, "id": task_id})
-    clear_app_cache()
 
 def delete_task_permanently(task_id):
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM document_tasks WHERE id = :id"), {"id": task_id})
-    clear_app_cache()
 
 init_db()
 create_user_if_not_exists("admin@auditreadiness.uz", "Admin123!@#", "Shohruh Shuxratov", "Sulton Styles", "super_admin")
@@ -290,7 +275,7 @@ def login_page():
         if os.path.exists(LOGO_PATH):
             st.image(LOGO_PATH, width=220)
             
-        st.title("🛡️ Sulton Certificates")
+        st.title("🛡 Sulton Certificates")
         st.caption("Sulton Tex Group — Xalqaro Audit va Sertifikatlashtirish Platformasi")
         st.divider()
         
@@ -339,7 +324,6 @@ def admin_user_management():
                 success, msg = create_user(new_email, new_password, full_name, factory_name, role[0])
                 if success:
                     st.success(msg)
-                    st.rerun()
                 else:
                     st.error(msg)
             else:
@@ -347,7 +331,7 @@ def admin_user_management():
 
 def main_dashboard():
     user = st.session_state.user
-    cert_dict = get_all_certificates_cached()
+    cert_dict = get_all_certificates()
     
     with st.sidebar:
         if os.path.exists(LOGO_PATH):
@@ -358,7 +342,6 @@ def main_dashboard():
         st.caption(f"🏢 {user['factory_name']} | Rol: **{ROLE_LABELS.get(user['role'], 'Compliance Manager')}**")
         
         if st.button("🔄 Yangilash", use_container_width=True):
-            clear_app_cache()
             st.rerun()
             
         st.divider()
@@ -388,8 +371,8 @@ def main_dashboard():
             st.warning("Hozircha sertifikatlar mavjud emas!")
 
         if user['role'] in ['super_admin', 'compliance_manager']:
-            with st.expander("🛠️️ Sertifikatlarni Boshqarish"):
-                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️️ Tahrirlash", "🗑️ O'chirish"])
+            with st.expander("🛠️ Sertifikatlarni Boshqarish"):
+                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️ Tahrirlash", "🗑️ O'chirish"])
                 
                 with tab_add:
                     new_c_code = st.text_input("Kodi (masalan: HIGG):", key="add_code")
@@ -438,7 +421,6 @@ def main_dashboard():
         st.divider()
         if st.button("Tizimdan chiqish", use_container_width=True):
             st.session_state.user = None
-            clear_app_cache()
             st.rerun()
 
     active_cert = st.session_state.selected_cert
@@ -449,7 +431,7 @@ def main_dashboard():
         st.title(f"📊 Axborotlar oynasi — [{active_cert}]")
         st.caption(f"{user['factory_name']} kompaniyasining **{active_cert_full_name}** standarti bo'yicha tayyorgarlik holati")
         
-        doc_tasks_df = get_document_tasks_cached(user['factory_name'], active_cert)
+        doc_tasks_df = get_document_tasks(user['factory_name'], active_cert)
         total_docs = len(doc_tasks_df)
         
         approved_docs = len(doc_tasks_df[doc_tasks_df['status'] == 'APPROVED']) if total_docs > 0 else 0
@@ -545,7 +527,8 @@ def main_dashboard():
         if user['role'] in ['super_admin', 'compliance_manager']:
             st.subheader("🔍 Compliance Manager: Kelib Tushgan Hujjatlarni Tekshirish va Tasdiqlash")
             
-            pending_review_df = get_document_tasks_cached(status_filter=True)
+            # FAQT KUTILAYOTGAN (PENDING YOKI UNDER_REVIEW) HUJJATLARNI OLISH
+            pending_review_df = get_document_tasks(status_filter=True)
             
             if not pending_review_df.empty:
                 st.write(f"📊 Kutilayotgan va tekshirilishi kerak bo'lgan hujjatlar soni: **{len(pending_review_df)} ta**")
@@ -604,14 +587,14 @@ def main_dashboard():
             
             # Tab 1: Topshiriq bo'yicha yuklash
             with tab_respond:
-                doc_tasks_emp = get_document_tasks_cached(user['factory_name'], active_cert, user['role'])
+                doc_tasks_emp = get_document_tasks(user['factory_name'], active_cert, user['role'])
                 pending_tasks = doc_tasks_emp[doc_tasks_emp['status'].isin(['PENDING', 'UNDER_REVIEW'])]
                 
                 if not pending_tasks.empty:
                     col_sel, col_up = st.columns(2)
                     with col_sel:
                         task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyotiy):", key="emp_comment_resp")
+                        emp_comment = st.text_input("Izoh (Ixtiyoriy):", key="emp_comment_resp")
                     with col_up:
                         task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"], key="task_file_resp")
                     
@@ -657,7 +640,8 @@ def main_dashboard():
 
         st.subheader(f"📂 Hujjatlar va Fayllar Reestri ({ROLE_LABELS.get(user['role'], 'Compliance Manager')})")
         
-        doc_tasks_approved = get_document_tasks_cached()
+        # Reestrda faqat tasdiqlangan (APPROVED) hujjatlar saqlanadi va ko'rsatiladi
+        doc_tasks_approved = get_document_tasks()
         doc_tasks_approved = doc_tasks_approved[doc_tasks_approved['status'] == 'APPROVED'] if not doc_tasks_approved.empty else pd.DataFrame()
         
         if not doc_tasks_approved.empty:
