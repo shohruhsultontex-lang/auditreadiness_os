@@ -6,29 +6,22 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. BAZA ULANISHI (OPTIMAL CACHING)
+# 1. BAZA ULANISHI (FAQAT BULUTLI SUPABASE)
 # ==========================================
 @st.cache_resource
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        try:
-            temp_engine = create_engine(
-                db_url,
-                connect_args={"connect_timeout": 10},
-                pool_pre_ping=True,
-                pool_recycle=300
-            )
-            with temp_engine.connect() as conn:
-                pass
-            return temp_engine
-        except Exception as e:
-            st.warning(f"⚠️ Supabase bulutli bazasiga ulanib bo'lmadi. Zaxira bazasi ishlatilmoqda: {e}")
-            
-    try:
-        return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
-    except Exception:
-        return create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        engine = create_engine(
+            db_url,
+            connect_args={"connect_timeout": 15},
+            pool_pre_ping=True,
+            pool_recycle=300
+        )
+        return engine
+    else:
+        st.error("❌ Secrets bo'limida [postgres] url topilmadi!")
+        st.stop()
 
 engine = get_db_engine()
 UPLOAD_DIR = "uploads"
@@ -223,7 +216,7 @@ create_user_if_not_exists("tradeunion@sulton.uz", "Union123!@#", "Kasaba Uyushma
 create_user_if_not_exists("osh@sulton.uz", "OSH123!@#", "OSH / Mehnat Muhofazasi", "Sulton Styles", "osh_manager")
 
 # ==========================================
-# 2. STREAMLIT CONFIGURATION & AUTO-REFRESH
+# 2. STREAMLIT CONFIGURATION
 # ==========================================
 st.set_page_config(
     page_title="Sulton Certificates",
@@ -322,8 +315,7 @@ def main_dashboard():
         st.write(f"👤 **{user['full_name']}**")
         st.caption(f"🏢 {user['factory_name']} | Rol: **{ROLE_LABELS.get(user['role'], 'Compliance Manager')}**")
         
-        col_ref1, col_ref2 = st.columns([2, 1])
-        if col_ref2.button("🔄 Yangilash"):
+        if st.button("🔄 Yangilash", use_container_width=True):
             st.rerun()
             
         st.divider()
@@ -534,7 +526,7 @@ def main_dashboard():
                                 if task['file_evidence'].lower().endswith(('.png', '.jpg', '.jpeg')):
                                     st.image(file_path, caption="Yuklangan Foto-dalil", use_container_width=True)
                             else:
-                                st.info("Eski test fayli (diskda yo'q)")
+                                st.info("Fayl server xotirasida yo'q")
 
                         st.divider()
                         col_act1, col_act2 = st.columns([3, 1])
@@ -644,7 +636,7 @@ def main_dashboard():
                             if f_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                                 st.image(f_path, width=300, caption=f"Foto-dalil: {f_name}")
                         else:
-                            col_t_dl.warning("⚠️ Fayl diskda yo'q (Eski yozuv)")
+                            col_t_dl.warning("⚠️️ Fayl server xotirasida yo'q")
                         st.divider()
                         
             if not has_files:
