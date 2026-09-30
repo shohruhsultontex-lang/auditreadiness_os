@@ -13,7 +13,6 @@ def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
         
-        # psycopg2 drayverini majburiy belgilash
         if "postgresql+psycopg://" in db_url:
             db_url = db_url.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
         elif db_url.startswith("postgresql://"):
@@ -187,35 +186,22 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
 
 def get_document_tasks(factory_name, cert_code=None, role=None):
     with engine.connect() as conn:
-        # Если зашел обычный сотрудник (HR, Эколог, OSH) — показывает только его задачи
+        # Odatiy ijrochi xodimlar faqat ozlariga tegishlisini koradi
         if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
-            query = text("""
-                SELECT * FROM document_tasks 
-                WHERE factory_name = :factory_name 
-                AND cert_code = :cert_code 
-                AND assigned_role = :role 
-                ORDER BY id DESC
-            """)
-            return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code, "role": role})
-        
-        # Если зашел Compliance Manager, Admin или CEO — показывает ВСЕ документы по этому сертификату
-        elif cert_code:
-            query = text("""
-                SELECT * FROM document_tasks 
-                WHERE factory_name = :factory_name 
-                AND cert_code = :cert_code 
-                ORDER BY id DESC
-            """)
-            return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code})
-        
-        # Общий вывод для реестра
+            if cert_code:
+                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code AND assigned_role = :role ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code, "role": role})
+            else:
+                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND assigned_role = :role ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"factory_name": factory_name, "role": role})
+        # Admin / Compliance / CEO BARCHA hujjatlarni koradi
         else:
-            query = text("""
-                SELECT * FROM document_tasks 
-                WHERE factory_name = :factory_name 
-                ORDER BY id DESC
-            """)
-            return pd.read_sql(query, conn, params={"factory_name": factory_name})
+            if cert_code:
+                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name AND cert_code = :cert_code ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"factory_name": factory_name, "cert_code": cert_code})
+            else:
+                query = text("SELECT * FROM document_tasks WHERE factory_name = :factory_name ORDER BY id DESC")
+                return pd.read_sql(query, conn, params={"factory_name": factory_name})
 
 def submit_task_evidence(task_id, file_obj, comment=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -531,31 +517,35 @@ def main_dashboard():
             st.subheader("🔍 Compliance Manager: Kelib Tushgan Hujjatlarni Tekshirish va Tasdiqlash")
             review_df = get_document_tasks(user['factory_name'], active_cert)
             
-            under_review_tasks = review_df[review_df['status'] == 'UNDER_REVIEW']
-            if not under_review_tasks.empty:
-                for _, task in under_review_tasks.iterrows():
-                    with st.expander(f"🔹 Topshiriq #{task['id']}: {task['task_title']} ({task['assigned_role']})", expanded=True):
+            # Compliance Manager uchun barcha holatdagi va yuklangan fayllari bor topshiriqlar/mustaqil hujjatlar ko'rsatiladi
+            if not review_df.empty:
+                for _, task in review_df.iterrows():
+                    with st.expander(f"🔹 Topshiriq #{task['id']}: {task['task_title']} ({ROLE_LABELS.get(task['assigned_role'], task['assigned_role'])}) — Status: [{task['status']}]", expanded=(task['status'] == 'UNDER_REVIEW')):
                         col_info, col_file = st.columns([2, 1])
                         
                         with col_info:
-                            st.write(f"**Bajarish muddati:** {task['due_date']}")
+                            st.write(f"**Bajarish muddati / Sana:** {task['due_date']}")
                             st.write(f"**Xodim izohi:** {task['comment'] if task['comment'] else 'Izoh yoq'}")
-                            st.write(f"**Yuklangan fayl:** `{task['file_evidence']}`")
+                            st.write(f"**Yuklangan fayl nomi:** `{task['file_evidence']}`")
 
                         with col_file:
-                            file_path = os.path.join(UPLOAD_DIR, str(task['file_evidence']))
-                            if os.path.exists(file_path):
-                                with open(file_path, "rb") as fp:
-                                    st.download_button(
-                                        label="📥 Faylni kompyuterga yuklab olish",
-                                        data=fp,
-                                        file_name=str(task['file_evidence']),
-                                        key=f"dl_{task['id']}"
-                                    )
-                                if task['file_evidence'].lower().endswith(('.png', '.jpg', '.jpeg')):
-                                    st.image(file_path, caption="Yuklangan Foto-dalil", use_container_width=True)
+                            f_ev = str(task['file_evidence'])
+                            if f_ev and f_ev != 'None' and f_ev != 'nan':
+                                file_path = os.path.join(UPLOAD_DIR, f_ev)
+                                if os.path.exists(file_path):
+                                    with open(file_path, "rb") as fp:
+                                        st.download_button(
+                                            label="📥 Faylni yuklab olish",
+                                            data=fp,
+                                            file_name=f_ev,
+                                            key=f"dl_{task['id']}"
+                                        )
+                                    if f_ev.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                        st.image(file_path, caption="Yuklangan Foto-dalil", use_container_width=True)
+                                else:
+                                    st.warning("Fayl server diskida topilmadi (Lokal yuklangan)")
                             else:
-                                st.info("Fayl server xotirasida yo'q")
+                                st.info("Hali fayl biriktirilmagan")
 
                         st.divider()
                         col_act1, col_act2 = st.columns([3, 1])
@@ -572,7 +562,7 @@ def main_dashboard():
                                 st.warning(f"ID #{task['id']} Qaytarildi!")
                                 st.rerun()
             else:
-                st.info("Hozircha tekshiruv va tasdiqlash kutilayotgan yangi hujjatlar yo'q.")
+                st.info("Hozircha ushbu sertifikat bo'yicha topshiriqlar yoki yuklangan hujjatlar yo'q.")
             st.divider()
 
         # MAS'UL XODIMLAR UCHUN TOPSHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
@@ -665,7 +655,7 @@ def main_dashboard():
                             if f_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                                 st.image(f_path, width=300, caption=f"Foto-dalil: {f_name}")
                         else:
-                            col_t_dl.warning("⚠️️ Fayl server xotirasida yo'q")
+                            col_t_dl.warning("⚠️ Fayl server diskida topilmadi (Lokal yuklangan)")
                         st.divider()
                         
             if not has_files:
@@ -674,7 +664,7 @@ def main_dashboard():
             st.info(f"{active_cert} standarti bo'yicha topshiriqlar mavjud emas.")
 
     # 3. ADMIN USER QO'SHISH
-    elif choice == "⚙️ Admin: User Qo'shish" and user['role'] in ['super_admin', 'compliance_manager']:
+    elif choice == "⚙️️ Admin: User Qo'shish" and user['role'] in ['super_admin', 'compliance_manager']:
         admin_user_management()
 
 if __name__ == "__main__":
