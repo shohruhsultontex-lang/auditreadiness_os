@@ -6,7 +6,7 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. BAZA ULANISHI
+# 1. BAZA ULANISHI (SUPABASE & FALLBACK)
 # ==========================================
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
@@ -19,15 +19,16 @@ def get_db_engine():
         try:
             temp_engine = create_engine(
                 db_url,
-                connect_args={"connect_timeout": 5},
+                connect_args={"connect_timeout": 10},
                 pool_pre_ping=True,
                 pool_recycle=300
             )
             with temp_engine.connect() as conn:
                 pass
             return temp_engine
-        except Exception:
-            pass # Xatolik bo'lsa ekranga chiqarilmaydi
+        except Exception as e:
+            st.error(f"⚠️ Bulutli baza (Supabase) bilan ulanishda xatolik: {e}")
+            st.warning("⚠️️ Zaxira lokal bazasi ishga tushirildi.")
             
     return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
 
