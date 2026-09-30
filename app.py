@@ -11,15 +11,6 @@ from sqlalchemy import create_engine, text
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        
-        # psycopg2 drayverini to'g'ri belgilash
-        if "postgresql+psycopg://" in db_url:
-            db_url = db_url.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
-        elif db_url.startswith("postgresql://"):
-            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        elif db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-            
         try:
             temp_engine = create_engine(
                 db_url,
@@ -31,8 +22,7 @@ def get_db_engine():
                 pass
             return temp_engine
         except Exception as e:
-            st.error(f"⚠️ Bulutli baza (Supabase) bilan ulanishda xatolik: {e}")
-            st.warning("⚠️ Zaxira lokal bazasi ishga tushirildi.")
+            st.warning(f"⚠️ Подключение к Supabase недоступно, переключение на локальную базу: {e}")
             
     return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
 
