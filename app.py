@@ -7,14 +7,15 @@ from sqlalchemy import create_engine, text
 
 # ==========================================
 # 1. BAZA ULANISHI (SUPABASE & FALLBACK)
-# ==========================================
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
-        if "postgresql+psycopg://" in db_url:
-            db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        
+        # psycopg2 drayverini majburiy belgilash
+        if db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
         elif db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql://", 1)
+            db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
             
         try:
             temp_engine = create_engine(
@@ -23,6 +24,14 @@ def get_db_engine():
                 pool_pre_ping=True,
                 pool_recycle=300
             )
+            with temp_engine.connect() as conn:
+                pass
+            return temp_engine
+        except Exception as e:
+            st.error(f"⚠️ Bulutli baza (Supabase) bilan ulanishda xatolik: {e}")
+            st.warning("⚠️ Zaxira lokal bazasi ishga tushirildi.")
+            
+    return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
             with temp_engine.connect() as conn:
                 pass
             return temp_engine
