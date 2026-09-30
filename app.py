@@ -23,7 +23,7 @@ def get_db_engine():
                 pass
             return temp_engine
         except Exception as e:
-            st.warning(f"Supabase ulanishida xatolik: {e}")
+            st.warning(f"⚠️ Supabase bulutli bazasiga ulanib bo'lmadi. Zaxira bazasi ishlatilmoqda: {e}")
             
     return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
 
@@ -546,7 +546,7 @@ def main_dashboard():
                 st.info("Hozircha tekshiruv va tasdiqlash kutilayotgan yangi hujjatlar yo'q.")
             st.divider()
 
-        # MAS'UL XODIMLAR UCHUN TOP SHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
+        # MAS'UL XODIMLAR UCHUN TOPSHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
         if user['role'] not in ['ceo', 'super_admin', 'compliance_manager']:
             st.subheader(f"📤 Hujjat va Dalillarni Yuklash ({ROLE_LABELS.get(user['role'], 'Mas\'ul Xodim')})")
             
