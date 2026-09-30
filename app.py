@@ -18,7 +18,6 @@ def get_db_engine():
                 pool_pre_ping=True,
                 pool_recycle=300
             )
-            # Test connection
             with temp_engine.connect() as conn:
                 pass
             return temp_engine
