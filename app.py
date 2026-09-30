@@ -18,14 +18,17 @@ def get_db_engine():
                 pool_pre_ping=True,
                 pool_recycle=300
             )
-            # Test ulanishi
+            # Test connection
             with temp_engine.connect() as conn:
                 pass
             return temp_engine
         except Exception as e:
             st.warning(f"⚠️ Supabase bulutli bazasiga ulanib bo'lmadi. Zaxira bazasi ishlatilmoqda: {e}")
             
-    return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
+    try:
+        return create_engine("sqlite:///data/app.db", connect_args={"check_same_thread": False})
+    except Exception:
+        return create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
 
 engine = get_db_engine()
 UPLOAD_DIR = "uploads"
