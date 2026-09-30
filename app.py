@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 # ==========================================
 # 1. BAZA ULANISHI (SUPABASE & FALLBACK)
 # ==========================================
+@st.cache_resource
 def get_db_engine():
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
