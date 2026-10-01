@@ -33,11 +33,15 @@ def get_db_engine():
         st.stop()
 
 @st.cache_resource
-def get_supabase_client() -> Client:
-    if "supabase" in st.secrets:
+def get_supabase_client():
+    if "supabase" in st.secrets and "url" in st.secrets["supabase"] and "key" in st.secrets["supabase"]:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
+        try:
+            return create_client(url, key)
+        except Exception as e:
+            st.warning(f"Supabase Client ulanishda xatolik: {e}")
+            return None
     return None
 
 engine = get_db_engine()
@@ -48,21 +52,27 @@ LOGO_PATH = "logo.png"
 def upload_file_to_supabase(file_obj):
     """Faylni Supabase Storage'ga yuklaydi va URL qaytaradi."""
     if not supabase_client:
-        return file_obj.name
+        st.error("❌ Supabase sozlamalari (Secrets) to'liq kiritilmagan!")
+        return None
     try:
         file_bytes = file_obj.getvalue()
-        file_path = f"uploads/{file_obj.name}"
+        # Fayl nomini takrorlanmas qilish uchun toza nom va yo'l
+        safe_filename = file_obj.name.replace(" ", "_")
+        file_path = f"uploads/{safe_filename}"
         
-        supabase_client.storage.from_(BUCKET_NAME).upload(
+        # Supabase Storage'ga yuklash
+        res = supabase_client.storage.from_(BUCKET_NAME).upload(
             path=file_path,
             file=file_bytes,
             file_options={"upsert": "true"}
         )
+        
+        # Public URL olish
         public_url = supabase_client.storage.from_(BUCKET_NAME).get_public_url(file_path)
         return public_url
     except Exception as e:
-        st.error(f"Fayl yuklashda xatolik: {str(e)}")
-        return file_obj.name
+        st.error(f"⚠️ Bulutga fayl yuklashda xatolik: {str(e)}")
+        return None
 
 @st.cache_data(ttl=5)
 def get_all_certificates_cached():
@@ -233,6 +243,9 @@ def add_single_document_task(factory_name, cert_code, task_title, assigned_role,
 
 def create_proactive_document(factory_name, cert_code, task_title, assigned_role, file_obj, comment=""):
     file_url = upload_file_to_supabase(file_obj)
+    if not file_url:
+        st.error("Fayl bulutga yuklanmadi, iltimos qaytadan urining!")
+        return False
         
     with engine.begin() as conn:
         conn.execute(text("""
@@ -244,15 +257,20 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
             "file_evidence": file_url, "comment": comment
         })
     clear_app_cache()
+    return True
 
 def submit_task_evidence(task_id, file_obj, comment=""):
     file_url = upload_file_to_supabase(file_obj)
+    if not file_url:
+        st.error("Fayl bulutga yuklanmadi, iltimos qaytadan urining!")
+        return False
         
     with engine.begin() as conn:
         conn.execute(text("""
             UPDATE document_tasks SET status = 'UNDER_REVIEW', file_evidence = :file_evidence, comment = :comment WHERE id = :id
         """), {"file_evidence": file_url, "comment": comment, "id": task_id})
     clear_app_cache()
+    return True
 
 def approve_task_status(task_id, feedback=""):
     with engine.begin() as conn:
@@ -581,7 +599,7 @@ def main_dashboard():
                             f_ev = str(task['file_evidence'])
                             if f_ev and f_ev != 'None' and f_ev != 'nan':
                                 if f_ev.startswith("http"):
-                                    st.markdown(f"[📥 Faylni yuklab olish / Ko'rish]({f_ev})")
+                                    st.markdown(f"🔗 [📥 Bulutdagi faylni yuklab olish / Ko'rish]({f_ev})")
                                     if f_ev.lower().endswith(('.png', '.jpg', '.jpeg')):
                                         st.image(f_ev, caption="Yuklangan Foto-dalil", use_container_width=True)
                                 else:
@@ -628,9 +646,10 @@ def main_dashboard():
                     
                     if st.button("Hujjatni Yuborish (Compliance Tekshiruviga)", key="btn_resp_sub"):
                         if task_file:
-                            submit_task_evidence(task_to_done, task_file, emp_comment)
-                            st.success("Hujjat saqlandi va Supabase Storage bulutiga yuklandi!")
-                            st.rerun()
+                            ok = submit_task_evidence(task_to_done, task_file, emp_comment)
+                            if ok:
+                                st.success("Hujjat saqlandi va Supabase Storage bulutiga yuklandi!")
+                                st.rerun()
                         else:
                             st.warning("Iltimos, fayl biriktiring!")
                 else:
@@ -651,7 +670,7 @@ def main_dashboard():
                     
                     if p_submit:
                         if p_task_title and p_file:
-                            create_proactive_document(
+                            ok = create_proactive_document(
                                 user['factory_name'],
                                 active_cert,
                                 p_task_title,
@@ -659,8 +678,9 @@ def main_dashboard():
                                 p_file,
                                 p_comment
                             )
-                            st.success("Yangi hujjat saqlandi va Bulutga yuborildi!")
-                            st.rerun()
+                            if ok:
+                                st.success("Yangi hujjat saqlandi va Bulutga yuborildi!")
+                                st.rerun()
                         else:
                             st.warning("Iltimos, hujjat nomini va faylni kiriting!")
 
@@ -686,7 +706,7 @@ def main_dashboard():
                         col_t_title.markdown(f"📄 **{r_task['task_title']}** | Standart: `{r_task['cert_code']}` | Mas'ul: `{r_task['assigned_role']}` | Holat: **{r_task['status']}**")
                         
                         if f_ev.startswith("http"):
-                            col_t_dl.markdown(f"[📥 Faylni Bulutdan Yuklab Olish]({f_ev})")
+                            col_t_dl.markdown(f"🔗 [📥 Faylni Bulutdan Yuklab Olish]({f_ev})")
                         else:
                             col_t_dl.warning("⚠️ Eski lokal fayl (Bulutda yo'q)")
                         st.divider()
