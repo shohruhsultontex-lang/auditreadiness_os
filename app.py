@@ -4,9 +4,10 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
+from supabase import create_client, Client
 
 # ==========================================
-# 1. BAZA ULANISHI (STABLE DIRECT CONNECTION)
+# 1. BAZA VA STORAGE ULANISHI
 # ==========================================
 @st.cache_resource
 def get_db_engine():
@@ -31,11 +32,40 @@ def get_db_engine():
         st.error("❌ Secrets bo'limida [postgres] url topilmadi!")
         st.stop()
 
+@st.cache_resource
+def get_supabase_client() -> Client:
+    if "supabase" in st.secrets:
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["key"]
+        return create_client(url, key)
+    return None
+
 engine = get_db_engine()
-UPLOAD_DIR = "uploads"
+supabase_client = get_supabase_client()
+BUCKET_NAME = "documents"
 LOGO_PATH = "logo.png"
 
-# KESH SO'ROVLAR (TEZKOR VA BEXATAR ISHLASH UCHUN)
+def upload_file_to_supabase(file_obj):
+    """Dosyayı Supabase Storage'a yükler ve URL döndürür."""
+    if not supabase_client:
+        return file_obj.name
+    try:
+        file_bytes = file_obj.getbuffer()
+        file_path = f"uploads/{file_obj.name}"
+        
+        # Supabase Storage'a yükle
+        supabase_client.storage.from_(BUCKET_NAME).upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"upsert": "true"}
+        )
+        # Public URL al
+        public_url = supabase_client.storage.from_(BUCKET_NAME).get_public_url(file_path)
+        return public_url
+    except Exception as e:
+        st.error(f"Fayl yuklashda xatolik: {str(e)}")
+        return file_obj.name
+
 @st.cache_data(ttl=5)
 def get_all_certificates_cached():
     with engine.connect() as conn:
@@ -72,7 +102,6 @@ def clear_app_cache():
     st.cache_data.clear()
 
 def init_db():
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
     with engine.begin() as conn:
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS users (
@@ -205,10 +234,7 @@ def add_single_document_task(factory_name, cert_code, task_title, assigned_role,
     clear_app_cache()
 
 def create_proactive_document(factory_name, cert_code, task_title, assigned_role, file_obj, comment=""):
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOAD_DIR, file_obj.name)
-    with open(file_path, "wb") as f:
-        f.write(file_obj.getbuffer())
+    file_url = upload_file_to_supabase(file_obj)
         
     with engine.begin() as conn:
         conn.execute(text("""
@@ -217,20 +243,17 @@ def create_proactive_document(factory_name, cert_code, task_title, assigned_role
         """), {
             "factory_name": factory_name, "cert_code": cert_code,
             "task_title": task_title, "assigned_role": assigned_role,
-            "file_evidence": file_obj.name, "comment": comment
+            "file_evidence": file_url, "comment": comment
         })
     clear_app_cache()
 
 def submit_task_evidence(task_id, file_obj, comment=""):
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOAD_DIR, file_obj.name)
-    with open(file_path, "wb") as f:
-        f.write(file_obj.getbuffer())
+    file_url = upload_file_to_supabase(file_obj)
         
     with engine.begin() as conn:
         conn.execute(text("""
             UPDATE document_tasks SET status = 'UNDER_REVIEW', file_evidence = :file_evidence, comment = :comment WHERE id = :id
-        """), {"file_evidence": file_obj.name, "comment": comment, "id": task_id})
+        """), {"file_evidence": file_url, "comment": comment, "id": task_id})
     clear_app_cache()
 
 def approve_task_status(task_id, feedback=""):
@@ -387,7 +410,7 @@ def main_dashboard():
 
         if user['role'] in ['super_admin', 'compliance_manager']:
             with st.expander("🛠️ Sertifikatlarni Boshqarish"):
-                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️️ Tahrirlash", "🗑️ O'chirish"])
+                tab_add, tab_edit, tab_del = st.tabs(["➕ Qo'shish", "✏️ Tahrirlash", "🗑️ O'chirish"])
                 
                 with tab_add:
                     new_c_code = st.text_input("Kodi (masalan: HIGG):", key="add_code")
@@ -555,24 +578,14 @@ def main_dashboard():
                             st.write(f"**Sertifikat:** `{task['cert_code']}` | **Fabrika:** `{task['factory_name']}`")
                             st.write(f"**Bajarish muddati / Sana:** {task['due_date']}")
                             st.write(f"**Xodim izohi:** {task['comment'] if task['comment'] else 'Izoh yoq'}")
-                            st.write(f"**Yuklangan fayl nomi:** `{task['file_evidence']}`")
 
                         with col_file:
                             f_ev = str(task['file_evidence'])
                             if f_ev and f_ev != 'None' and f_ev != 'nan':
-                                file_path = os.path.join(UPLOAD_DIR, f_ev)
-                                if os.path.exists(file_path):
-                                    with open(file_path, "rb") as fp:
-                                        st.download_button(
-                                            label="📥 Faylni yuklab olish",
-                                            data=fp,
-                                            file_name=f_ev,
-                                            key=f"dl_{task['id']}"
-                                        )
-                                    if f_ev.lower().endswith(('.png', '.jpg', '.jpeg')):
-                                        st.image(file_path, caption="Yuklangan Foto-dalil", use_container_width=True)
+                                if f_ev.startswith("http"):
+                                    st.markdown(f"[📥 Faylni yuklab olish]({f_ev})")
                                 else:
-                                    st.warning("Fayl server diskida topilmadi (Lokal yuklangan)")
+                                    st.warning("Eski lokal yuklangan fayl (Bulutda yo'q)")
                             else:
                                 st.info("Hali fayl biriktirilmagan")
 
@@ -616,7 +629,7 @@ def main_dashboard():
                     if st.button("Hujjatni Yuborish (Compliance Tekshiruviga)", key="btn_resp_sub"):
                         if task_file:
                             submit_task_evidence(task_to_done, task_file, emp_comment)
-                            st.success("Hujjat saqlandi! Compliance tekshiruviga yuborildi.")
+                            st.success("Hujjat saqlandi va Supabase Storage bulutiga yuklandi!")
                             st.rerun()
                         else:
                             st.warning("Iltimos, fayl biriktiring!")
@@ -646,7 +659,7 @@ def main_dashboard():
                                 p_file,
                                 p_comment
                             )
-                            st.success("Yangi hujjat saqlandi va Compliance Manager ga tekshiruvga yuborildi!")
+                            st.success("Yangi hujjat saqlandi va Bulutga yuborildi!")
                             st.rerun()
                         else:
                             st.warning("Iltimos, hujjat nomini va faylni kiriting!")
@@ -665,28 +678,17 @@ def main_dashboard():
             
             has_files = False
             for _, r_task in doc_tasks_approved.iterrows():
-                f_name = str(r_task['file_evidence'])
-                if f_name and f_name != 'None' and f_name != 'nan':
+                f_ev = str(r_task['file_evidence'])
+                if f_ev and f_ev != 'None' and f_ev != 'nan':
                     has_files = True
-                    f_path = os.path.join(UPLOAD_DIR, f_name)
-                    
                     with st.container():
                         col_t_title, col_t_dl = st.columns([3, 1])
-                        col_t_title.markdown(f"📄 **{r_task['task_title']}** | Standart: `{r_task['cert_code']}` | Mas'ul: `{r_task['assigned_role']}` | Holat: **{r_task['status']}**\n\nFayl nomi: `{f_name}`")
+                        col_t_title.markdown(f"📄 **{r_task['task_title']}** | Standart: `{r_task['cert_code']}` | Mas'ul: `{r_task['assigned_role']}` | Holat: **{r_task['status']}**")
                         
-                        if os.path.exists(f_path):
-                            with open(f_path, "rb") as f_data:
-                                col_t_dl.download_button(
-                                    label="📥 Faylni yuklab olish",
-                                    data=f_data,
-                                    file_name=f_name,
-                                    key=f"main_dl_{r_task['id']}",
-                                    type="primary"
-                                )
-                            if f_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-                                st.image(f_path, width=300, caption=f"Foto-dalil: {f_name}")
+                        if f_ev.startswith("http"):
+                            col_t_dl.markdown(f"[📥 Faylni Bulutdan Yuklab Olish]({f_ev})")
                         else:
-                            col_t_dl.warning("⚠️ Fayl server diskida topilmadi (Lokal yuklangan)")
+                            col_t_dl.warning("⚠️ Eski lokal fayl (Bulutda yo'q)")
                         st.divider()
                         
             if not has_files:
