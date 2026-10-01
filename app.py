@@ -50,21 +50,26 @@ BUCKET_NAME = "documents"
 LOGO_PATH = "logo.png"
 
 def upload_file_to_supabase(file_obj):
-    """Faylni Supabase Storage'ga yuklaydi va URL qaytaradi."""
+    """Faylni Supabase Storage'ga yuklaydi va to'g'ri URL qaytaradi."""
     if not supabase_client:
         st.error("❌ Supabase sozlamalari (Secrets) to'liq kiritilmagan!")
         return None
     try:
         file_bytes = file_obj.getvalue()
-        # Fayl nomini takrorlanmas qilish uchun toza nom va yo'l
         safe_filename = file_obj.name.replace(" ", "_")
         file_path = f"uploads/{safe_filename}"
         
-        # Supabase Storage'ga yuklash
+        # Fayl turini (MIME type) aniqlash
+        content_type = file_obj.type if hasattr(file_obj, "type") and file_obj.type else "application/octet-stream"
+        
+        # Supabase Storage'ga to'g'ri content-type bilan yuklash
         res = supabase_client.storage.from_(BUCKET_NAME).upload(
             path=file_path,
             file=file_bytes,
-            file_options={"upsert": "true"}
+            file_options={
+                "upsert": "true",
+                "content-type": content_type
+            }
         )
         
         # Public URL olish
