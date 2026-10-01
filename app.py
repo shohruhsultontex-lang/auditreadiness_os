@@ -42,7 +42,7 @@ def get_supabase_client() -> Client:
 
 engine = get_db_engine()
 supabase_client = get_supabase_client()
-BUCKET_NAME = "documents"
+BUCKET_NAME = "DOCUMENTS"
 LOGO_PATH = "logo.png"
 
 def upload_file_to_supabase(file_obj):
