@@ -46,20 +46,21 @@ BUCKET_NAME = "documents"
 LOGO_PATH = "logo.png"
 
 def upload_file_to_supabase(file_obj):
-    """Dosyayı Supabase Storage'a yükler ve URL döndürür."""
+    """Dosyayı Supabase Storage'a yükler va URL döndürür."""
     if not supabase_client:
         return file_obj.name
     try:
-        file_bytes = file_obj.getbuffer()
+        # getbuffer() o'rniga to'g'ridan-to'g'ri baytlarni (bytes) olamiz
+        file_bytes = file_obj.getvalue()
         file_path = f"uploads/{file_obj.name}"
         
-        # Supabase Storage'a yükle
+        # Supabase Storage'a yuklash
         supabase_client.storage.from_(BUCKET_NAME).upload(
             path=file_path,
             file=file_bytes,
             file_options={"upsert": "true"}
         )
-        # Public URL al
+        # Public URL olish
         public_url = supabase_client.storage.from_(BUCKET_NAME).get_public_url(file_path)
         return public_url
     except Exception as e:
