@@ -580,16 +580,18 @@ def main_dashboard():
                             st.write(f"**Bajarish muddati / Sana:** {task['due_date']}")
                             st.write(f"**Xodim izohi:** {task['comment'] if task['comment'] else 'Izoh yoq'}")
 
-                        with col_file:
-                            f_ev = str(task['file_evidence'])
-                            if f_ev and f_ev != 'None' and f_ev != 'nan':
-                                if f_ev.startswith("http"):
-                                    st.markdown(f"[📥 Faylni yuklab olish]({f_ev})")
-                                else:
-                                    st.warning("Eski lokal yuklangan fayl (Bulutda yo'q)")
-                            else:
-                                st.info("Hali fayl biriktirilmagan")
-
+                      # Compliance ko'rish bo'limidagi fayl qismi
+with col_file:
+    f_ev = str(task['file_evidence'])
+    if f_ev and f_ev != 'None' and f_ev != 'nan':
+        if f_ev.startswith("http"):
+            st.markdown(f"[📥 Faylni yuklab olish / Ko'rish]({f_ev})")
+            if f_ev.lower().endswith(('.png', '.jpg', '.jpeg')):
+                st.image(f_ev, caption="Yuklangan Foto-dalil", use_container_width=True)
+        else:
+            st.warning("Eski lokal yuklangan fayl (Bulutda yo'q)")
+    else:
+        st.info("Hali fayl biriktirilmagan")
                         st.divider()
                         col_act1, col_act2 = st.columns([3, 1])
                         with col_act1:
