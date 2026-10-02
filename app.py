@@ -49,6 +49,8 @@ supabase_client = get_supabase_client()
 BUCKET_NAME = "documents"
 LOGO_PATH = "logo.png"
 
+import re
+
 def upload_file_to_supabase(file_obj):
     """Faylni Supabase Storage'ga yuklaydi va to'g'ri URL qaytaradi."""
     if not supabase_client:
@@ -56,13 +58,15 @@ def upload_file_to_supabase(file_obj):
         return None
     try:
         file_bytes = file_obj.getvalue()
-       safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', file_obj.name)
-       file_path = f"uploads/{safe_filename}"
+        
+        # Fayl nomidagi tutuq belgisi (`), bo'shliq va maxsus belgilarni '_' ga almashtirish
+        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', file_obj.name)
+        file_path = f"uploads/{safe_filename}"
         
         # Fayl turini (MIME type) aniqlash
         content_type = file_obj.type if hasattr(file_obj, "type") and file_obj.type else "application/octet-stream"
         
-        # Supabase Storage'ga to'g'ri content-type bilan yuklash
+        # Supabase Storage'ga yuklash
         res = supabase_client.storage.from_(BUCKET_NAME).upload(
             path=file_path,
             file=file_bytes,
@@ -76,7 +80,7 @@ def upload_file_to_supabase(file_obj):
         public_url = supabase_client.storage.from_(BUCKET_NAME).get_public_url(file_path)
         return public_url
     except Exception as e:
-        st.error(f"⚠️ Bulutga fayl yuklashda xatolik: {str(e)}")
+        st.error(f"⚠️️ Bulutga fayl yuklashda xatolik: {str(e)}")
         return None
 
 @st.cache_data(ttl=5)
