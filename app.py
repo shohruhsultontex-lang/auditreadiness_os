@@ -56,8 +56,8 @@ def upload_file_to_supabase(file_obj):
         return None
     try:
         file_bytes = file_obj.getvalue()
-        safe_filename = file_obj.name.replace(" ", "_")
-        file_path = f"uploads/{safe_filename}"
+       safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', file_obj.name)
+       file_path = f"uploads/{safe_filename}"
         
         # Fayl turini (MIME type) aniqlash
         content_type = file_obj.type if hasattr(file_obj, "type") and file_obj.type else "application/octet-stream"
