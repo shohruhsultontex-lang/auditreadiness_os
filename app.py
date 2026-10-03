@@ -34,17 +34,14 @@ def get_db_engine():
 
 @st.cache_resource
 def get_supabase_client():
-    if "supabase" in st.secrets and "url" in st.secrets["supabase"] and "key" in st.secrets["supabase"]:
+    try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        try:
-            return create_client(url, key)
-        except Exception as e:
-            st.warning(f"Supabase Client ulanishda xatolik: {e}")
-            return None
-    return None
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Supabase ulanishida xatolik: {e}")
+        return None
 
-engine = get_db_engine()
 supabase_client = get_supabase_client()
 BUCKET_NAME = "documents"
 LOGO_PATH = "logo.png"
