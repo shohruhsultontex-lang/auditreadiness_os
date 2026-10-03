@@ -1,4 +1,5 @@
 import os
+import re
 import bcrypt
 import pandas as pd
 import plotly.express as px
@@ -7,10 +8,11 @@ from sqlalchemy import create_engine, text
 from supabase import create_client, Client
 
 # ==========================================
-# 1. BAZA VA STORAGE ULANISHI
+# 1. OPTIMIZATSIYALASHGAN BAZA VA STORAGE ULANISHI
 # ==========================================
 @st.cache_resource
 def get_db_engine():
+    """Baza ulanishini keshga olish va connection pool'ni optimallashtirish."""
     if "postgres" in st.secrets and "url" in st.secrets["postgres"]:
         db_url = st.secrets["postgres"]["url"]
         
@@ -25,7 +27,9 @@ def get_db_engine():
             db_url,
             connect_args={"connect_timeout": 10},
             pool_pre_ping=True,
-            pool_recycle=300
+            pool_recycle=300,
+            pool_size=10,
+            max_overflow=20
         )
         return engine
     else:
@@ -34,33 +38,35 @@ def get_db_engine():
 
 @st.cache_resource
 def get_supabase_client():
-    try:
+    """Supabase mijozini bitta kesh ob'ekti sifatida saqlash."""
+    if "supabase" in st.secrets and "url" in st.secrets["supabase"] and "key" in st.secrets["supabase"]:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
-    except Exception as e:
-        st.error(f"Supabase ulanishida xatolik: {e}")
-        return None
+        try:
+            return create_client(url, key)
+        except Exception as e:
+            st.warning(f"Supabase Client ulanishda xatolik: {e}")
+            return None
+    return None
 
+engine = get_db_engine()
 supabase_client = get_supabase_client()
-BUCKET_NAME = "documents"
+BUCKET_NAME = "documents"  # Supabase Storage'dagi to'g'ri bucket nomi
 LOGO_PATH = "logo.png"
 
-import re
-
 def upload_file_to_supabase(file_obj):
-    """Faylni Supabase Storage'ga yuklaydi va to'g'ri URL qaytaradi."""
+    """Faylni Supabase Storage'ga xavfsiz va tezkor yuklaydi hamda URL qaytaradi."""
     if not supabase_client:
         st.error("❌ Supabase sozlamalari (Secrets) to'liq kiritilmagan!")
         return None
     try:
         file_bytes = file_obj.getvalue()
         
-        # Fayl nomidagi tutuq belgisi (`), bo'shliq va maxsus belgilarni '_' ga almashtirish
+        # Fayl nomidagi tutuq belgisi (`), bo'shliq va maxsus belgilarni avtomatik '_' ga o'tkazish
         safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', file_obj.name)
         file_path = f"uploads/{safe_filename}"
         
-        # Fayl turini (MIME type) aniqlash
+        # MIME type ni to'g'ri aniqlash (PDF va rasm ko'rinishida muammo bo'lmasligi uchun)
         content_type = file_obj.type if hasattr(file_obj, "type") and file_obj.type else "application/octet-stream"
         
         # Supabase Storage'ga yuklash
@@ -77,16 +83,19 @@ def upload_file_to_supabase(file_obj):
         public_url = supabase_client.storage.from_(BUCKET_NAME).get_public_url(file_path)
         return public_url
     except Exception as e:
-        st.error(f"⚠️️ Bulutga fayl yuklashda xatolik: {str(e)}")
+        st.error(f"⚠️ Bulutga fayl yuklashda xatolik: {str(e)}")
         return None
 
-@st.cache_data(ttl=5)
+# ==========================================
+# 2. KESH (CACHE) BILAN ISHLAYDIGAN BAZA FUNKSIYALARI
+# ==========================================
+@st.cache_data(ttl=600)
 def get_all_certificates_cached():
     with engine.connect() as conn:
         df = pd.read_sql("SELECT cert_code, cert_name FROM custom_certificates", conn)
         return dict(zip(df['cert_code'], df['cert_name']))
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=30)
 def get_document_tasks_cached(factory_name=None, cert_code=None, role=None, status_filter=None):
     with engine.connect() as conn:
         if role and role in ["hr_manager", "ecologist", "trade_union", "osh_manager"]:
@@ -290,6 +299,7 @@ def delete_task_permanently(task_id):
         conn.execute(text("DELETE FROM document_tasks WHERE id = :id"), {"id": task_id})
     clear_app_cache()
 
+# Dastlabki bazani va standart userlarni sozlash
 init_db()
 create_user_if_not_exists("admin@auditreadiness.uz", "Admin123!@#", "Shohruh Shuxratov", "Sulton Styles", "super_admin")
 create_user_if_not_exists("compliance@sulton.uz", "Comp123!@#", "Shohruh Compliance", "Sulton Styles", "compliance_manager")
@@ -300,7 +310,7 @@ create_user_if_not_exists("tradeunion@sulton.uz", "Union123!@#", "Kasaba Uyushma
 create_user_if_not_exists("osh@sulton.uz", "OSH123!@#", "OSH / Mehnat Muhofazasi", "Sulton Styles", "osh_manager")
 
 # ==========================================
-# 2. STREAMLIT CONFIGURATION
+# 3. STREAMLIT INTERFEYSI VA SILLIQ (PLAVNIY) QISMLAR
 # ==========================================
 st.set_page_config(
     page_title="Sulton Certificates",
@@ -338,26 +348,28 @@ def login_page():
         st.divider()
         
         st.subheader("Tizimga kirish")
-        email = st.text_input("Email pochta")
-        password = st.text_input("Parol", type="password")
-        
-        if st.button("Kirish", use_container_width=True, type="primary"):
-            if email and password:
-                user = verify_login(email, password)
-                if user:
-                    st.session_state.user = user
-                    st.success(f"Xush kelibsiz, {user['full_name']}!")
-                    st.rerun()
+        with st.form("login_form"):
+            email = st.text_input("Email pochta")
+            password = st.text_input("Parol", type="password")
+            submit_login = st.form_submit_button("Kirish", use_container_width=True, type="primary")
+            
+            if submit_login:
+                if email and password:
+                    user = verify_login(email, password)
+                    if user:
+                        st.session_state.user = user
+                        st.success(f"Xush kelibsiz, {user['full_name']}!")
+                        st.rerun()
+                    else:
+                        st.error("Email yoki parol noto'g'ri!")
                 else:
-                    st.error("Email yoki parol noto'g'ri!")
-            else:
-                st.warning("Iltimos, barcha maydonlarni to'ldiring!")
+                    st.warning("Iltimos, barcha maydonlarni to'ldiring!")
 
 def admin_user_management():
     st.header("👤 Foydalanuvchilarni boshqarish (Admin & Compliance)")
     st.info("Yangi fabrika xodimi yoki Rahbariyat uchun login va parol shakllantirish")
     
-    with st.form("create_user_form"):
+    with st.form("create_user_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             new_email = st.text_input("Foydalanuvchi Email pochtasi")
@@ -387,6 +399,70 @@ def admin_user_management():
                     st.error(msg)
             else:
                 st.warning("Barcha maydonlarni to'liq to'ldiring!")
+
+# PLAVNIY HUJJAT YUKLASH FRAGMENTI (Butun sahifa oqarib reload bo'lmasligi uchun)
+@st.fragment
+def render_upload_fragment(user, active_cert):
+    st.subheader(f"📤 Hujjat va Dalillarni Yuklash ({ROLE_LABELS.get(user['role'], 'Mas\'ul Xodim')})")
+    
+    tab_respond, tab_new = st.tabs(["📋 Biriktirilgan Topshiriqqa Javob Berish", "➕ Mustaqil Yangi Hujjat/Rasm Yuklash"])
+    
+    # Tab 1: Topshiriq bo'yicha yuklash
+    with tab_respond:
+        doc_tasks_emp = get_document_tasks_cached(user['factory_name'], active_cert, user['role'])
+        pending_tasks = doc_tasks_emp[doc_tasks_emp['status'].isin(['PENDING', 'UNDER_REVIEW'])]
+        
+        if not pending_tasks.empty:
+            with st.form("resp_form", clear_on_submit=True):
+                col_sel, col_up = st.columns(2)
+                with col_sel:
+                    task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
+                    emp_comment = st.text_input("Izoh (Ixtiyoriy):", key="emp_comment_resp")
+                with col_up:
+                    task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"], key="task_file_resp")
+                
+                btn_sub = st.form_submit_button("Hujjatni Yuborish (Compliance Tekshiruviga)")
+                if btn_sub:
+                    if task_file:
+                        with st.spinner("Bulutga saqlanmoqda..."):
+                            ok = submit_task_evidence(task_to_done, task_file, emp_comment)
+                            if ok:
+                                st.success("✅ Hujjat saqlandi va Supabase Storage bulutiga yuklandi!")
+                                st.rerun()
+                    else:
+                        st.warning("Iltimos, fayl biriktiring!")
+        else:
+            st.success("Sizga biriktirilgan kutilayotgan topshiriqlar yo'q.")
+
+    # Tab 2: Topshiriqsiz mustaqil yangi hujjat yuklash
+    with tab_new:
+        st.info("Topshiriq biriktirilmagan bo'lsa ham, ushbu xalqaro standartga tegishli hujjat yoki foto-dalilni yuklashingiz mumkin:")
+        with st.form("new_proactive_doc_form", clear_on_submit=True):
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                p_task_title = st.text_input("Hujjat / Rasm Nomi (Mavzusi):", placeholder="Masalan: Ekologik xulosa hujjati 2026")
+                p_comment = st.text_input("Izoh yoki Qo'shimcha Izoh:")
+            with col_p2:
+                p_file = st.file_uploader("Fayl yoki Rasmni yuklang:", type=["pdf", "docx", "png", "jpg"], key="proactive_file")
+            
+            p_submit = st.form_submit_button("Hujjatni Yuklash va Compliance'ga Yuborish")
+            
+            if p_submit:
+                if p_task_title and p_file:
+                    with st.spinner("Bulutga yuklanmoqda..."):
+                        ok = create_proactive_document(
+                            user['factory_name'],
+                            active_cert,
+                            p_task_title,
+                            user['role'],
+                            p_file,
+                            p_comment
+                        )
+                        if ok:
+                            st.success("✅ Yangi hujjat saqlandi va Bulutga yuborildi!")
+                            st.rerun()
+                else:
+                    st.warning("Iltimos, hujjat nomini va faylni kiriting!")
 
 def main_dashboard():
     user = st.session_state.user
@@ -552,7 +628,7 @@ def main_dashboard():
         if user['role'] in ['super_admin', 'compliance_manager', 'factory_admin']:
             st.subheader("➕ Mas'ul Xodimlarga Topshiriq va Muddat Biriktirish")
             
-            with st.form("add_task_form"):
+            with st.form("add_task_form", clear_on_submit=True):
                 col_t, col_r, col_d = st.columns([2, 1.5, 1])
                 
                 with col_t:
@@ -631,65 +707,9 @@ def main_dashboard():
                 st.info("Hozircha tekshirish uchun yangi kelib tushgan hujjatlar yo'q.")
             st.divider()
 
-        # MAS'UL XODIMLAR UCHUN TOPSHIRIQ VA MUSTAQIL HUJJAT YUKLASH BO'LIMI
+        # MAS'UL XODIMLAR UCHUN PLAVNIY YUKLASH BO'LIMI
         if user['role'] not in ['ceo', 'super_admin', 'compliance_manager']:
-            st.subheader(f"📤 Hujjat va Dalillarni Yuklash ({ROLE_LABELS.get(user['role'], 'Mas\'ul Xodim')})")
-            
-            tab_respond, tab_new = st.tabs(["📋 Biriktirilgan Topshiriqqa Javob Berish", "➕ Mustaqil Yangi Hujjat/Rasm Yuklash"])
-            
-            # Tab 1: Topshiriq bo'yicha yuklash
-            with tab_respond:
-                doc_tasks_emp = get_document_tasks_cached(user['factory_name'], active_cert, user['role'])
-                pending_tasks = doc_tasks_emp[doc_tasks_emp['status'].isin(['PENDING', 'UNDER_REVIEW'])]
-                
-                if not pending_tasks.empty:
-                    col_sel, col_up = st.columns(2)
-                    with col_sel:
-                        task_to_done = st.selectbox("Topshiriqni tanlang (ID):", pending_tasks['id'].tolist(), format_func=lambda x: f"ID #{x} - {pending_tasks[pending_tasks['id']==x]['task_title'].values[0]}")
-                        emp_comment = st.text_input("Izoh (Ixtiyoriy):", key="emp_comment_resp")
-                    with col_up:
-                        task_file = st.file_uploader("Tayyorlangan hujjat yoki fotoni yuklang (PDF/DOCX/PNG/JPG):", type=["pdf", "docx", "png", "jpg"], key="task_file_resp")
-                    
-                    if st.button("Hujjatni Yuborish (Compliance Tekshiruviga)", key="btn_resp_sub"):
-                        if task_file:
-                            ok = submit_task_evidence(task_to_done, task_file, emp_comment)
-                            if ok:
-                                st.success("Hujjat saqlandi va Supabase Storage bulutiga yuklandi!")
-                                st.rerun()
-                        else:
-                            st.warning("Iltimos, fayl biriktiring!")
-                else:
-                    st.success("Sizga biriktirilgan kutilayotgan topshiriqlar yo'q.")
-
-            # Tab 2: Topshiriqsiz mustaqil yangi hujjat yuklash
-            with tab_new:
-                st.info("Topshiriq biriktirilmagan bo'lsa ham, ushbu xalqaro standartga tegishli hujjat yoki foto-dalilni yuklashingiz mumkin:")
-                with st.form("new_proactive_doc_form"):
-                    col_p1, col_p2 = st.columns(2)
-                    with col_p1:
-                        p_task_title = st.text_input("Hujjat / Rasm Nomi (Mavzusi):", placeholder="Masalan: Ekologik xulosa hujjati 2026")
-                        p_comment = st.text_input("Izoh yoki Qo'shimcha Izoh:")
-                    with col_p2:
-                        p_file = st.file_uploader("Fayl yoki Rasmni yuklang:", type=["pdf", "docx", "png", "jpg"], key="proactive_file")
-                    
-                    p_submit = st.form_submit_button("Hujjatni Yuklash va Compliance'ga Yuborish")
-                    
-                    if p_submit:
-                        if p_task_title and p_file:
-                            ok = create_proactive_document(
-                                user['factory_name'],
-                                active_cert,
-                                p_task_title,
-                                user['role'],
-                                p_file,
-                                p_comment
-                            )
-                            if ok:
-                                st.success("Yangi hujjat saqlandi va Bulutga yuborildi!")
-                                st.rerun()
-                        else:
-                            st.warning("Iltimos, hujjat nomini va faylni kiriting!")
-
+            render_upload_fragment(user, active_cert)
             st.divider()
 
         st.subheader(f"📂 Hujjatlar va Fayllar Reestri ({ROLE_LABELS.get(user['role'], 'Compliance Manager')})")
@@ -714,7 +734,7 @@ def main_dashboard():
                         if f_ev.startswith("http"):
                             col_t_dl.markdown(f"🔗 [📥 Faylni Bulutdan Yuklab Olish]({f_ev})")
                         else:
-                            col_t_dl.warning("⚠️ Eski lokal fayl (Bulutda yo'q)")
+                            col_t_dl.warning("⚠️️ Eski lokal fayl (Bulutda yo'q)")
                         st.divider()
                         
             if not has_files:
